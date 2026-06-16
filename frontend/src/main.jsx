@@ -1,246 +1,76 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
-import { BookOpen, CheckCircle2, Clock, Plus, RefreshCcw, Search, Trash2 } from 'lucide-react';
+import { 
+  BookOpen, CheckCircle2, Clock, Plus, Search, 
+  X, Home, Library, History, User 
+} from 'lucide-react';
 import { libraryApi } from './api';
 import './styles.css';
 
-const emptyForm = {
-  title: '',
-  author: '',
-  category: '',
-  description: '',
-};
-
 function App() {
-  const [books, setBooks] = React.useState([]);
-  const [selectedBook, setSelectedBook] = React.useState(null);
-  const [records, setRecords] = React.useState([]);
-  const [form, setForm] = React.useState(emptyForm);
-  const [editingId, setEditingId] = React.useState(null);
-  const [userId, setUserId] = React.useState('U001');
-  const [search, setSearch] = React.useState('');
-  const [loading, setLoading] = React.useState(false);
-  const [message, setMessage] = React.useState(null);
-
-  const showMessage = (type, text) => {
-    setMessage({ type, text });
-    window.setTimeout(() => setMessage(null), 3500);
-  };
+  const [activeTab, setActiveTab] = useState('home');
+  const [books, setBooks] = useState([]);
+  const [selectedBook, setSelectedBook] = useState(null);
+  const [search, setSearch] = useState('');
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  
+  // State lưu dữ liệu form
+  const [newBook, setNewBook] = useState({ title: '', author: '', category: '', cover: '', description: '' });
 
   const loadData = async () => {
-    setLoading(true);
     try {
-      const [bookData, recordData] = await Promise.all([
-        libraryApi.getBooks(),
-        libraryApi.getBorrowRecords(),
-      ]);
-      setBooks(bookData);
-      setRecords(recordData);
+      const data = await libraryApi.getBooks();
+      setBooks(data);
     } catch (error) {
-      showMessage('error', error.message);
-    } finally {
-      setLoading(false);
+      console.error("Lỗi tải dữ liệu:", error);
     }
   };
 
-  React.useEffect(() => {
-    loadData();
-  }, []);
+  useEffect(() => { loadData(); }, []);
 
-  const filteredBooks = books.filter((book) => {
-    const keyword = search.toLowerCase().trim();
-    if (!keyword) return true;
-    return [book.title, book.author, book.category]
-      .filter(Boolean)
-      .some((field) => field.toLowerCase().includes(keyword));
-  });
+  const handleInputChange = (e) => {
+    const { name, value } = e.target;
+    setNewBook(prev => ({ ...prev, [name]: value }));
+  };
 
-  const handleSubmit = async (event) => {
-    event.preventDefault();
-    if (!form.title.trim() || !form.author.trim()) {
-      showMessage('error', 'Vui lòng nhập tên sách và tác giả.');
-      return;
-    }
-
+  const handleSubmit = async (e) => {
+    e.preventDefault();
     try {
-      if (editingId) {
-        await libraryApi.updateBook(editingId, form);
-        showMessage('success', 'Cập nhật sách thành công.');
-      } else {
-        await libraryApi.createBook(form);
-        showMessage('success', 'Thêm sách thành công.');
-      }
-      setForm(emptyForm);
-      setEditingId(null);
-      await loadData();
+      await libraryApi.createBook(newBook);
+      alert("Đã thêm sách thành công!");
+      setIsModalOpen(false);
+      setNewBook({ title: '', author: '', category: '', cover: '', description: '' });
+      loadData();
     } catch (error) {
-      showMessage('error', error.message);
+      alert("Lỗi khi thêm sách: " + error.message);
     }
   };
 
-  const editBook = (book) => {
-    setEditingId(book.id);
-    setForm({
-      title: book.title || '',
-      author: book.author || '',
-      category: book.category || '',
-      description: book.description || '',
-    });
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  };
-
-  const deleteBook = async (book) => {
-    const confirmed = window.confirm(`Xóa sách "${book.title}"?`);
-    if (!confirmed) return;
-
-    try {
-      await libraryApi.deleteBook(book.id);
-      showMessage('success', 'Xóa sách thành công.');
-      if (selectedBook?.id === book.id) setSelectedBook(null);
-      await loadData();
-    } catch (error) {
-      showMessage('error', error.message);
-    }
-  };
-
-  const borrowBook = async (book) => {
-    if (!userId.trim()) {
-      showMessage('error', 'Vui lòng nhập User ID trước khi mượn sách.');
-      return;
-    }
-    try {
-      await libraryApi.borrowBook(book.id, userId.trim());
-      showMessage('success', `Mượn sách "${book.title}" thành công.`);
-      await loadData();
-    } catch (error) {
-      showMessage('error', error.message);
-    }
-  };
-
-  const returnBook = async (book) => {
-    if (!userId.trim()) {
-      showMessage('error', 'Vui lòng nhập User ID trước khi trả sách.');
-      return;
-    }
-    try {
-      await libraryApi.returnBook(book.id, userId.trim());
-      showMessage('success', `Trả sách "${book.title}" thành công.`);
-      await loadData();
-    } catch (error) {
-      showMessage('error', error.message);
-    }
-  };
-
-  const viewDetail = async (bookId) => {
-    try {
-      const book = await libraryApi.getBook(bookId);
-      setSelectedBook(book);
-    } catch (error) {
-      showMessage('error', error.message);
-    }
-  };
-
-  const borrowedCount = books.filter((book) => !book.available).length;
-  const availableCount = books.filter((book) => book.available).length;
-
-  return (
-    <main className="app-shell">
+  // --- TRANG CHỦ ---
+  const renderHomeTab = () => (
+    <>
       <section className="hero">
         <div>
-          <p className="eyebrow">Sprint 0 - Core App</p>
+          <p className="eyebrow">DASHBOARD</p>
           <h1>Library Borrowing System</h1>
-          <p className="subtitle">
-            Ứng dụng mượn/trả sách cơ bản dùng React, Flask API và PostgreSQL.
-          </p>
+          <p className="subtitle">Hệ thống quản lý kho sách tập trung, giúp theo dõi vận hành thư viện hiệu quả.</p>
         </div>
-        <button className="secondary-button" onClick={loadData} disabled={loading}>
-          <RefreshCcw size={18} />
-          {loading ? 'Đang tải...' : 'Refresh'}
-        </button>
       </section>
-
-      {message && <div className={`toast ${message.type}`}>{message.text}</div>}
 
       <section className="stats-grid">
-        <StatCard title="Tổng sách" value={books.length} icon={<BookOpen />} />
-        <StatCard title="Còn sẵn" value={availableCount} icon={<CheckCircle2 />} />
-        <StatCard title="Đang mượn" value={borrowedCount} icon={<Clock />} />
+        <StatCard type="total" title="Tổng sách" value={books.length} subtitle="đầu sách" icon={<BookOpen size={28}/>} />
+        <StatCard type="avail" title="Còn sẵn" value={books.filter(b => b.available).length} subtitle="quyển" icon={<CheckCircle2 size={28}/>} />
+        <StatCard type="borrow" title="Đang mượn" value={books.filter(b => !b.available).length} subtitle="quyển" icon={<Clock size={28}/>} />
       </section>
-
-      <section className="panel form-panel">
-        <div className="section-header">
-          <div>
-            <h2>{editingId ? 'Cập nhật sách' : 'Thêm sách mới'}</h2>
-            <p>CRUD sách trong thư viện.</p>
-          </div>
-        </div>
-
-        <form className="book-form" onSubmit={handleSubmit}>
-          <input
-            value={form.title}
-            onChange={(event) => setForm({ ...form, title: event.target.value })}
-            placeholder="Tên sách"
-          />
-          <input
-            value={form.author}
-            onChange={(event) => setForm({ ...form, author: event.target.value })}
-            placeholder="Tác giả"
-          />
-          <input
-            value={form.category}
-            onChange={(event) => setForm({ ...form, category: event.target.value })}
-            placeholder="Thể loại"
-          />
-          <textarea
-            value={form.description}
-            onChange={(event) => setForm({ ...form, description: event.target.value })}
-            placeholder="Mô tả sách"
-          />
-          <div className="form-actions">
-            <button className="primary-button" type="submit">
-              <Plus size={18} />
-              {editingId ? 'Lưu cập nhật' : 'Thêm sách'}
-            </button>
-            {editingId && (
-              <button
-                className="ghost-button"
-                type="button"
-                onClick={() => {
-                  setEditingId(null);
-                  setForm(emptyForm);
-                }}
-              >
-                Hủy
-              </button>
-            )}
-          </div>
-        </form>
-      </section>
-
+      
       <section className="content-grid">
         <div className="panel">
-          <div className="section-header">
-            <div>
-              <h2>Danh sách sách</h2>
-              <p>GET /books, GET /books/:id, POST /borrow, POST /return</p>
-            </div>
-            <div className="user-field">
-              <label>User ID</label>
-              <input value={userId} onChange={(event) => setUserId(event.target.value)} />
-            </div>
-          </div>
-
           <div className="search-box">
             <Search size={18} />
-            <input
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="Tìm theo tên sách, tác giả hoặc thể loại..."
-            />
+            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Tìm kiếm sách..." />
           </div>
-
           <div className="book-list">
-            {filteredBooks.map((book) => (
+            {books.filter(b => b.title.toLowerCase().includes(search.toLowerCase())).map((book) => (
               <article className="book-card" key={book.id}>
                 <div>
                   <div className="book-title-row">
@@ -250,73 +80,120 @@ function App() {
                     </span>
                   </div>
                   <p className="meta">{book.author} · {book.category}</p>
-                  <p className="description">{book.description || 'Chưa có mô tả.'}</p>
                 </div>
                 <div className="card-actions">
-                  <button className="secondary-button" onClick={() => viewDetail(book.id)}>Detail</button>
-                  <button className="secondary-button" onClick={() => editBook(book)}>Edit</button>
-                  {book.available ? (
-                    <button className="primary-button" onClick={() => borrowBook(book)}>Borrow</button>
-                  ) : (
-                    <button className="primary-button" onClick={() => returnBook(book)}>Return</button>
-                  )}
-                  <button className="danger-button" onClick={() => deleteBook(book)} aria-label="Delete book">
-                    <Trash2 size={16} />
-                  </button>
+                  <button className="secondary-button" onClick={() => setSelectedBook(book)}>Detail</button>
                 </div>
               </article>
             ))}
-            {filteredBooks.length === 0 && <p className="empty-state">Không tìm thấy sách phù hợp.</p>}
           </div>
         </div>
-
         <aside className="panel side-panel">
           <h2>Chi tiết sách</h2>
           {selectedBook ? (
             <div className="detail-box">
               <h3>{selectedBook.title}</h3>
               <p><strong>Tác giả:</strong> {selectedBook.author}</p>
-              <p><strong>Thể loại:</strong> {selectedBook.category}</p>
-              <p><strong>Trạng thái:</strong> {selectedBook.available ? 'Còn sẵn' : 'Đang được mượn'}</p>
-              <p><strong>Mô tả:</strong> {selectedBook.description || 'Chưa có mô tả.'}</p>
-              <h4>Lịch sử mượn/trả</h4>
-              {selectedBook.borrow_records?.length ? (
-                <ul className="record-list">
-                  {selectedBook.borrow_records.map((record) => (
-                    <li key={record.id}>
-                      User {record.user_id}: {record.status}
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="empty-state">Chưa có lịch sử.</p>
-              )}
             </div>
-          ) : (
-            <p className="empty-state">Chọn Detail để xem thông tin sách.</p>
-          )}
-
-          <h2 className="mt">Giao dịch gần đây</h2>
-          <ul className="record-list">
-            {records.slice(0, 8).map((record) => (
-              <li key={record.id}>
-                Book #{record.book_id} · User {record.user_id} · {record.status}
-              </li>
-            ))}
-          </ul>
+          ) : (<p className="empty-state">Chọn Detail để xem thông tin sách.</p>)}
         </aside>
       </section>
-    </main>
+    </>
+  );
+
+  // --- TRANG BOOKS ---
+  const renderBooksTab = () => (
+    <div className="books-page">
+      <div className="page-header">
+        <div><h2>Quản lý kho sách</h2><p className="text-muted">Xem, thêm, sửa, xóa và quản lý trạng thái sách</p></div>
+        <button className="primary-button" onClick={() => setIsModalOpen(true)}><Plus size={18} /> Thêm sách mới</button>
+      </div>
+
+      <div className="mini-stats-row">
+        <div className="mini-stat"><span className="dot blue"></span> Tổng: <strong>{books.length}</strong></div>
+        <div className="mini-stat"><span className="dot green"></span> Có sẵn: <strong>{books.filter(b => b.available).length}</strong></div>
+        <div className="mini-stat"><span className="dot red"></span> Đang mượn: <strong>{books.filter(b => !b.available).length}</strong></div>
+      </div>
+
+      <div className="panel no-pad">
+        <div className="table-container">
+          <table className="data-table">
+            <thead><tr><th>Mã</th><th>Tên sách</th><th>Tác giả</th><th>Thể loại</th></tr></thead>
+            <tbody>
+              {books.map(b => (
+                <tr key={b.id}><td>#{b.id}</td><td>{b.title}</td><td>{b.author}</td><td>{b.category}</td></tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {isModalOpen && (
+        <div className="modal-overlay">
+          <div className="modal-content">
+            <div className="modal-header">
+              <h2>Thêm sách mới</h2>
+              <button className="icon-button" onClick={() => setIsModalOpen(false)}><X size={24} /></button>
+            </div>
+            <form className="modal-form" onSubmit={handleSubmit}>
+              <input name="title" value={newBook.title} onChange={handleInputChange} placeholder="Tên sách" required />
+              <input name="author" value={newBook.author} onChange={handleInputChange} placeholder="Tên tác giả" required />
+              <input name="category" value={newBook.category} onChange={handleInputChange} placeholder="Thể loại" />
+              <input name="cover" value={newBook.cover} onChange={handleInputChange} placeholder="Link ảnh bìa sách (URL)" />
+              <textarea name="description" value={newBook.description} onChange={handleInputChange} placeholder="Mô tả sách..." />
+              <div className="modal-actions">
+                <button type="button" className="ghost-button" onClick={() => setIsModalOpen(false)}>Hủy</button>
+                <button type="submit" className="primary-button">Xác nhận thêm</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
+  // --- TRANG HISTORY ---
+  const renderHistoryTab = () => (
+    <div className="books-page">
+      <h2>Lịch sử mượn trả</h2>
+      <div className="panel no-pad">
+        <div className="table-container">
+          <table className="data-table">
+            <thead><tr><th>Mã giao dịch</th><th>Mã sách</th><th>Người mượn</th><th>Trạng thái</th></tr></thead>
+            <tbody>
+              <tr><td colSpan="4" className="empty-table"><div style={{padding:'40px'}}>Chưa có dữ liệu lịch sử.</div></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+
+  return (
+    <>
+      <header className="top-nav">
+        <div className="nav-container">
+          <div className="logo"><Library size={24} /> <span>CloudLibrary</span></div>
+          <ul className="nav-links">
+            <li><a href="#" className={activeTab === 'home' ? 'active' : ''} onClick={() => setActiveTab('home')}><Home size={18} /> Home</a></li>
+            <li><a href="#" className={activeTab === 'books' ? 'active' : ''} onClick={() => setActiveTab('books')}><BookOpen size={18} /> Books</a></li>
+            <li><a href="#" className={activeTab === 'history' ? 'active' : ''} onClick={() => setActiveTab('history')}><History size={18} /> History</a></li>
+          </ul>
+          <div className="user-input-nav"><span>U001</span><div className="user-avatar"><User size={16} /></div></div>
+        </div>
+      </header>
+      <main className="app-shell">{activeTab === 'home' ? renderHomeTab() : activeTab === 'books' ? renderBooksTab() : renderHistoryTab()}</main>
+    </>
   );
 }
 
-function StatCard({ title, value, icon }) {
+function StatCard({ type, title, value, subtitle, icon }) {
   return (
-    <div className="stat-card">
+    <div className={`stat-card stat-${type}`}>
       <div className="stat-icon">{icon}</div>
-      <div>
+      <div className="stat-info">
         <p>{title}</p>
-        <strong>{value}</strong>
+        <div className="stat-value-row"><strong>{value}</strong><span>{subtitle}</span></div>
       </div>
     </div>
   );

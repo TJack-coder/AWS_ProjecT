@@ -28,7 +28,12 @@ jobs:
         working-directory: backend
         env:
           DATABASE_URL: sqlite:///ci_library.db
-        run: python -c "from app import app; print(app.name)"
+        run: |
+          python - <<'PY'
+          from app import create_app
+          app = create_app()
+          print(app.name)
+          PY
 
   frontend-check:
     runs-on: ubuntu-latest

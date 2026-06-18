@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
+import { X } from 'lucide-react';
 import { libraryApi } from '../api';
 
-export default function BorrowModal({ book, user, onClose, onRefresh }) {
+export default function BorrowModal({ books, user, onClose, onRefresh }) {
   const [step, setStep] = useState(1);
   const [formData, setFormData] = useState({
     customerName: user?.fullName || '',
@@ -17,19 +18,23 @@ export default function BorrowModal({ book, user, onClose, onRefresh }) {
 
   const handleConfirmBorrow = async () => {
     try {
-      await libraryApi.borrowBook({
-        book_id: book.id,
-        customerName: formData.customerName,
-        phone: formData.phone,
-        cccd: formData.cccd,
-        returnDate: formData.returnDate,
-        deposit: 150000 
-      });
-      alert("Đã tạo phiếu mượn sách thành công!");
-      onRefresh(); // Gọi hàm làm mới dữ liệu từ main.jsx
-      onClose();   // Đóng modal
+      // Gửi request cho từng cuốn sách trong giỏ
+      await Promise.all(books.map(book => 
+        libraryApi.borrowBook({
+          book_id: book.id,
+          customerName: formData.customerName,
+          phone: formData.phone,
+          cccd: formData.cccd,
+          returnDate: formData.returnDate,
+          deposit: 150000 // Bạn có thể tùy chỉnh phí này
+        })
+      ));
+      
+      alert(`Đã tạo phiếu mượn thành công cho ${books.length} quyển sách!`);
+      onRefresh(); 
+      onClose();
     } catch (error) {
-      alert("Có lỗi xảy ra khi mượn sách: " + error.message);
+      alert("Lỗi khi tạo phiếu mượn: " + error.message);
     }
   };
 
@@ -38,18 +43,21 @@ export default function BorrowModal({ book, user, onClose, onRefresh }) {
       <div className="modal-content">
         {step === 1 ? (
           <>
-            <h2>Mượn sách: {book.title}</h2>
+            <h2>Mượn {books.length} quyển sách</h2>
+            <div style={{ background: '#f1f5f9', padding: '10px', borderRadius: '8px', marginBottom: '15px', fontSize: '0.9rem' }}>
+              <strong>Danh sách: </strong> {books.map(b => b.title).join(', ')}
+            </div>
             <form className="modal-form" onSubmit={(e) => { e.preventDefault(); setStep(2); }}>
               <input name="customerName" value={formData.customerName} onChange={handleChange} placeholder="Tên khách hàng" required />
               <input name="phone" value={formData.phone} onChange={handleChange} placeholder="Số điện thoại" required />
               <input name="cccd" value={formData.cccd} onChange={handleChange} placeholder="Số CCCD" required />
               <div style={{ display: 'flex', gap: '16px' }}>
-                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                  <label style={{ fontSize: '0.85rem', color: '#64748b', fontWeight: 600 }}>Ngày mượn</label>
+                <div style={{ flex: 1 }}>
+                  <label style={{ fontSize: '0.8rem', color: '#64748b' }}>Ngày mượn</label>
                   <input type="date" name="borrowDate" value={formData.borrowDate} onChange={handleChange} required />
                 </div>
-                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                  <label style={{ fontSize: '0.85rem', color: '#64748b', fontWeight: 600 }}>Ngày trả dự kiến</label>
+                <div style={{ flex: 1 }}>
+                  <label style={{ fontSize: '0.8rem', color: '#64748b' }}>Ngày trả dự kiến</label>
                   <input type="date" name="returnDate" value={formData.returnDate} onChange={handleChange} required />
                 </div>
               </div>
@@ -63,16 +71,10 @@ export default function BorrowModal({ book, user, onClose, onRefresh }) {
           <>
             <h2>Xác nhận thanh toán</h2>
             <div style={{ background: '#f8fafc', padding: '16px', borderRadius: '12px', marginBottom: '20px', border: '1px solid #e2e8f0' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
-                <span style={{ color: '#475569' }}>Phí mượn sách:</span><strong>50.000 VNĐ</strong>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
-                <span style={{ color: '#475569' }}>Tiền cọc:</span><strong>100.000 VNĐ</strong>
-              </div>
-              <hr style={{ border: 'none', borderTop: '1px dashed #cbd5e1', margin: '12px 0' }} />
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '1.1rem', color: '#0f172a' }}>
-                <span><strong>Tổng cộng:</strong></span><strong style={{ color: '#e11d48' }}>150.000 VNĐ</strong>
-              </div>
+              <p>Tổng số sách: <strong>{books.length} quyển</strong></p>
+              <p style={{ color: '#e11d48', fontSize: '1.2rem', fontWeight: 800 }}>
+                Tổng tiền cọc: {(books.length * 150000).toLocaleString()} VNĐ
+              </p>
             </div>
             <div className="modal-actions">
               <button className="ghost-button" onClick={() => setStep(1)}>Quay lại</button>
@@ -84,4 +86,3 @@ export default function BorrowModal({ book, user, onClose, onRefresh }) {
     </div>
   );
 }
-

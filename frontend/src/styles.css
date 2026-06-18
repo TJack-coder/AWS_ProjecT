@@ -124,6 +124,21 @@ button { cursor: pointer; }
 }
 .book-card:hover { transform: translateY(-5px); box-shadow: 0 20px 25px -5px rgba(0,0,0,0.1); }
 
+.book-card {
+  background-color: #ffffff;
+  border: 1px solid #e2e8f0; /* Viền xám nhạt giúp tách biệt với nền */
+  border-radius: 16px;
+  padding: 16px;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06); /* Đổ bóng nhẹ */
+  transition: all 0.2s ease-in-out;
+}
+
+.book-card:hover {
+  transform: translateY(-5px); /* Trượt nhẹ lên trên khi di chuột */
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.15), 0 4px 6px -2px rgba(0, 0, 0, 0.1); /* Đổ bóng đậm hơn */
+  border-color: #cbd5e1;
+}
+
 .badge { padding: 6px 12px; border-radius: 99px; font-size: 0.8rem; font-weight: 700; display: inline-block; text-align: center; }
 .badge.available { background: #dcfce7; color: #166534; }
 .badge.borrowed { background: #fee2e2; color: #991b1b; }
@@ -207,127 +222,58 @@ button { cursor: pointer; }
   to { transform: translateX(0); }
 }
 
-/* --- Các màu nút bấm và Badge mở rộng cho History --- */
-.badge { padding: 6px 12px; border-radius: 99px; font-size: 0.8rem; font-weight: 700; display: inline-block; text-align: center; }
-.badge.available { background: #dcfce7; color: #166534; }
-.badge.borrowed { background: #fee2e2; color: #991b1b; }
-
 /* ==========================================================================
    RESPONSIVE DESIGN (MEDIA QUERIES)
    ========================================================================== */
 
 /* --- 1. MÀN HÌNH TABLET (Dưới 1024px) --- */
 @media (max-width: 1024px) {
-  /* Chuyển layout từ chia 2 cột (Content - Sidebar) thành 1 cột dọc */
-  .content-grid {
-    display: flex;
-    flex-direction: column;
-  }
-  .side-panel {
-    position: static; /* Hủy dính (sticky) khi cuộn trên màn hình nhỏ */
-    width: 100%;
-  }
+  .content-grid { display: flex; flex-direction: column; }
+  .side-panel { position: static; width: 100%; }
 }
 
 /* --- 2. MÀN HÌNH MOBILE (Dưới 768px) --- */
 @media (max-width: 768px) {
-  /* Header & Thanh điều hướng: Đẩy Menu xuống hàng thứ 2 */
-  .nav-container {
-    flex-wrap: wrap;
-    height: auto;
-    padding: 10px 0;
-  }
+  .nav-container { flex-wrap: wrap; height: auto; padding: 10px 0; }
   .nav-links {
-    position: static;
-    transform: none;
-    width: 100%;
-    justify-content: center;
-    margin-top: 10px;
-    order: 3; /* Đẩy menu xuống dưới cùng */
-    border-top: 1px solid #f1f5f9;
+    position: static; transform: none; width: 100%; justify-content: center;
+    margin-top: 10px; order: 3; border-top: 1px solid #f1f5f9;
   }
-  .nav-links a {
-    height: 50px;
-    padding: 0 15px;
-    font-size: 0.95rem;
-  }
-  .user-input-nav {
-    order: 2; /* Avatar ở góc phải trên cùng */
-  }
-  .logo { 
-    order: 1; /* Logo ở góc trái trên cùng */
-  }
+  .nav-links a { height: 50px; padding: 0 15px; font-size: 0.95rem; }
+  .user-input-nav { order: 2; }
+  .logo { order: 1; }
+  
+  .hero { padding: 40px 24px; }
+  .hero h1 { font-size: 2rem; }
+  .stats-grid { grid-template-columns: 1fr; gap: 16px; }
 
-  /* Hero Banner: Thu nhỏ padding và chữ */
-  .hero {
-    padding: 40px 24px;
-  }
-  .hero h1 {
-    font-size: 2rem;
-  }
+  .page-header { flex-direction: column; align-items: flex-start; gap: 16px; }
+  .page-header .primary-button { width: 100%; justify-content: center; }
 
-  /* Thống kê (Stats): Xếp thành 1 cột dọc */
-  .stats-grid {
-    grid-template-columns: 1fr;
-    gap: 16px;
-  }
-
-  /* Page Header (Trang Books & History): Đưa nút bấm xuống dòng */
-  .page-header {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 16px;
-  }
-  .page-header .primary-button {
-    width: 100%;
-    justify-content: center;
-  }
-
-  /* Khung Modal & Drawer */
-  .modal-content {
-    width: 95%;
-    padding: 24px;
-    margin: 10px;
-  }
-  .drawer-content {
-    max-width: 100%; /* Drawer trượt ra chiếm Full màn hình điện thoại */
-  }
-
-  /* Cột Hành động trong bảng: Bóp nút xếp chồng lên nhau cho đỡ chật */
-  .action-cell {
-    flex-direction: column;
-    align-items: flex-start;
-  }
+  .modal-content { width: 95%; padding: 24px; margin: 10px; }
+  .drawer-content { max-width: 100%; }
+  .action-cell { flex-direction: column; align-items: flex-start; }
 }
 
 /* --- 3. MÀN HÌNH MOBILE NHỎ (Dưới 480px) --- */
 @media (max-width: 480px) {
-  /* Lưới sách: Ép hiện 2 cuốn / 1 hàng trên điện thoại dọc */
-  .book-list {
-    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-    gap: 12px;
-  }
-  
-  .book-card {
-    padding: 12px;
-  }
-  
-  .book-card img {
-    width: 100% !important; /* Ảnh bìa full chiều ngang của thẻ */
-    height: auto !important;
-    aspect-ratio: 2/3; /* Ép luôn giữ tỉ lệ sách */
-  }
+  .book-list { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; }
+  .book-card { padding: 12px; }
+  .book-card img { width: 100% !important; height: auto !important; aspect-ratio: 2/3; }
 
-  /* Nút bấm trên thẻ sách: Thu nhỏ chữ và lề để nhét vừa 2 nút */
-  .book-card .primary-button, 
-  .book-card .ghost-button {
-    padding: 8px 4px;
-    font-size: 0.75rem;
-  }
+  .book-card .primary-button, .book-card .ghost-button { padding: 8px 4px; font-size: 0.75rem; }
   
-  /* Modal chia 2 cột ngày mượn/trả -> Gộp thành 1 cột */
-  .modal-form > div[style*="display: flex"] {
-    flex-direction: column;
-    gap: 12px !important;
-  }
-} 
+  .modal-form > div[style*="display: flex"] { flex-direction: column; gap: 12px !important; }
+}
+
+/* Hiệu ứng bong bóng nảy cho các thẻ Thống kê */
+.stat-bubble {
+  transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  cursor: default; /* Đổi con trỏ chuột bình thường vì đây không phải nút bấm */
+}
+
+.stat-bubble:hover {
+  transform: translateY(-8px) scale(1.03); /* Nảy lên 8px và phình to 3% */
+  box-shadow: 0 15px 25px -5px rgba(0, 0, 0, 0.15), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+  border-color: #cbd5e1 !important;
+}

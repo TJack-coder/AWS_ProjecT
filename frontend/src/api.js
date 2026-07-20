@@ -1,36 +1,54 @@
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000';
 
 async function request(path, options = {}) {
+  const token = localStorage.getItem('library_token');
+  
+  const headers = {
+    'Content-Type': 'application/json',
+    ...(options.headers || {}),
+  };
+
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
   const response = await fetch(`${API_BASE_URL}${path}`, {
-    headers: {
-      'Content-Type': 'application/json',
-      ...(options.headers || {}),
-    },
     ...options,
+    headers,
   });
 
-  let data = null;
-  const contentType = response.headers.get('content-type');
-  if (contentType && contentType.includes('application/json')) {
-    data = await response.json();
+  // Bộ đánh chặn 401: Xử lý token hết hạn
+  if (response.status === 401) {
+    localStorage.removeItem('library_token');
+    alert('Phiên đăng nhập đã hết hạn hoặc không hợp lệ. Vui lòng đăng nhập lại.');
+    window.location.reload();
+    throw new Error('Phiên đăng nhập hết hạn');
   }
+
+  const data = await response.json().catch(() => null);
 
   if (!response.ok) {
-    const message = data?.message || `Request failed with status ${response.status}`;
-    throw new Error(message);
+    throw new Error(data?.message || `Lỗi: ${response.status}`);
   }
-
   return data;
 }
 
 export const libraryApi = {
-  getBooks: () => request('/books'),
-  getBook: (id) => request(`/books/${id}`),
-  createBook: (payload) => request('/books', { method: 'POST', body: JSON.stringify(payload) }),
-  updateBook: (id, payload) => request(`/books/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
-  deleteBook: (id) => request(`/books/${id}`, { method: 'DELETE' }),
-  borrowBook: (bookId, userId) => request('/borrow', { method: 'POST', body: JSON.stringify({ book_id: bookId, user_id: userId }) }),
-  returnBook: (bookId, userId) => request('/return', { method: 'POST', body: JSON.stringify({ book_id: bookId, user_id: userId }) }),
-  getBorrowRecords: () => request('/borrow-records'),
-};
+  // Authentication
+  login: (username, password) => request('/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ username, password })
+  }),
+  getMe: () => request('/auth/me'),
 
+  // Books Management
+  getBooks: () => request('/books'),
+  createBook: (payload) => request('/books', { method: 'POST', body: JSON.stringify(payload) }),
+  deleteBook: (id) => request(`/books/${id}`, { method: 'DELETE' }),
+
+  // Borrow & Return Management
+  borrowBook: (payload) => request('/borrow', { method: 'POST', body: JSON.stringify(payload) }),
+  returnBook: (payload) => request('/return', { method: 'POST', body: JSON.stringify(payload) }),
+  getBorrowRecords: () => request('/borrow-records'),
+  getMyBorrowRecords: () => request('/my-borrow-records'),
+};

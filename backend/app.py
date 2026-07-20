@@ -2,14 +2,17 @@ import json
 import logging
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from functools import wraps
 
+import jwt
 from dotenv import load_dotenv
 from flask import Flask, g, jsonify, request
 from flask_cors import CORS
+from sqlalchemy import inspect, text
 from sqlalchemy.exc import SQLAlchemyError
 
-from models import Book, BorrowRecord, db
+from models import Book, BorrowRecord, User, db
 
 load_dotenv()
 
@@ -45,12 +48,19 @@ def create_app():
     configure_logging()
 
     app = Flask(__name__)
-    CORS(app)
+    CORS(
+        app,
+        resources={r"/*": {"origins": "*"}},
+        allow_headers=["Content-Type", "Authorization", "X-Request-ID"],
+        expose_headers=["X-Request-ID"],
+    )
 
     database_url = os.getenv("DATABASE_URL", "postgresql://library_user:library_password@localhost:5432/library_db")
     app.config["SQLALCHEMY_DATABASE_URI"] = database_url
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
     app.config["JSON_SORT_KEYS"] = False
+    app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY", "dev-secret-key-change-me")
+    app.config["JWT_EXPIRES_HOURS"] = int(os.getenv("JWT_EXPIRES_HOURS", "24"))
 
     db.init_app(app)
     logger = logging.getLogger(__name__)
@@ -70,46 +80,434 @@ def create_app():
     def log_error(message, **kwargs):
         logger.error(message, extra={"request_id": g.get("request_id", "system"), "extra_data": kwargs}, exc_info=True)
 
-    def seed_books_if_empty():
-        if Book.query.count() > 0:
+    def generate_token(user):
+        now = datetime.now(timezone.utc)
+        payload = {
+            "sub": str(user.id),
+            "user_id": user.id,
+            "username": user.username,
+            "role": user.role,
+            "iat": now,
+            "exp": now + timedelta(hours=app.config["JWT_EXPIRES_HOURS"]),
+        }
+        return jwt.encode(payload, app.config["JWT_SECRET_KEY"], algorithm="HS256")
+
+    def get_bearer_token():
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
+            return None
+        return auth_header.replace("Bearer ", "", 1).strip()
+
+    def token_required(handler):
+        @wraps(handler)
+        def wrapper(*args, **kwargs):
+            token = get_bearer_token()
+            if not token:
+                return jsonify({"message": "Authorization token is required"}), 401
+            try:
+                decoded = jwt.decode(token, app.config["JWT_SECRET_KEY"], algorithms=["HS256"])
+                user = User.query.get(decoded.get("user_id"))
+                if not user:
+                    return jsonify({"message": "User not found"}), 401
+                g.current_user = user
+                return handler(*args, **kwargs)
+            except jwt.ExpiredSignatureError:
+                return jsonify({"message": "Token has expired"}), 401
+            except jwt.InvalidTokenError:
+                return jsonify({"message": "Invalid token"}), 401
+
+        return wrapper
+
+    def admin_required(handler):
+        @wraps(handler)
+        @token_required
+        def wrapper(*args, **kwargs):
+            if g.current_user.role != "admin":
+                return jsonify({"message": "Admin permission is required"}), 403
+            return handler(*args, **kwargs)
+
+        return wrapper
+
+    def normalize_role(role):
+        role = (role or "user").strip().lower()
+        return role if role in {"admin", "user"} else "user"
+
+    def get_request_user_id(payload):
+        """Admin may pass user_id. Normal user can only act as himself/herself."""
+        if getattr(g, "current_user", None) and g.current_user.role == "admin" and payload.get("user_id"):
+            return str(payload.get("user_id"))
+        if getattr(g, "current_user", None):
+            return str(g.current_user.id)
+        return str(payload.get("user_id")) if payload.get("user_id") else None
+
+    def ensure_dev_schema():
+        """
+        db.create_all() creates new tables, but does not add columns to old tables.
+        This lightweight dev migration keeps existing local DBs usable after adding cover/customer fields.
+        """
+        inspector = inspect(db.engine)
+
+        def column_names(table_name):
+            if not inspector.has_table(table_name):
+                return set()
+            return {col["name"] for col in inspector.get_columns(table_name)}
+
+        def add_column_if_missing(table_name, column_name, ddl):
+            existing = column_names(table_name)
+            if column_name not in existing:
+                db.session.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {ddl}"))
+                db.session.commit()
+                logger.info(
+                    "Added missing database column",
+                    extra={"request_id": "system", "extra_data": {"table": table_name, "column": column_name}},
+                )
+
+        add_column_if_missing("books", "cover", "cover TEXT")
+        add_column_if_missing("borrow_records", "customer_name", "customer_name VARCHAR(255)")
+        add_column_if_missing("borrow_records", "phone", "phone VARCHAR(20)")
+        add_column_if_missing("borrow_records", "cccd", "cccd VARCHAR(20)")
+        add_column_if_missing("borrow_records", "expected_return_date", "expected_return_date VARCHAR(50)")
+        add_column_if_missing("borrow_records", "deposit", "deposit INTEGER")
+
+    def seed_users_if_empty():
+        if User.query.count() > 0:
             return
-        sample_books = [
-            Book(
-                title="Clean Code",
-                author="Robert C. Martin",
-                category="Programming",
-                description="A handbook of agile software craftsmanship.",
-                available=True,
-            ),
-            Book(
-                title="Design Patterns",
-                author="Erich Gamma, Richard Helm, Ralph Johnson, John Vlissides",
-                category="Software Engineering",
-                description="Classic design pattern book for object-oriented software design.",
-                available=True,
-            ),
-            Book(
-                title="Python Crash Course",
-                author="Eric Matthes",
-                category="Programming",
-                description="A practical introduction to Python programming.",
-                available=True,
-            ),
-            Book(
-                title="Database System Concepts",
-                author="Abraham Silberschatz, Henry F. Korth, S. Sudarshan",
-                category="Database",
-                description="Foundational concepts for relational database systems.",
-                available=True,
-            ),
-        ]
-        db.session.add_all(sample_books)
+
+        admin = User(
+            username=os.getenv("DEFAULT_ADMIN_USERNAME", "admin"),
+            role="admin",
+            full_name="System Admin",
+        )
+        admin.set_password(os.getenv("DEFAULT_ADMIN_PASSWORD", "admin123"))
+
+        normal_user = User(
+            username=os.getenv("DEFAULT_USER_USERNAME", "user"),
+            role="user",
+            full_name="Demo User",
+        )
+        normal_user.set_password(os.getenv("DEFAULT_USER_PASSWORD", "user123"))
+
+        db.session.add_all([admin, normal_user])
         db.session.commit()
-        logger.info("Seeded sample books", extra={"request_id": "system", "extra_data": {"count": len(sample_books)}})
+        logger.info("Seeded default users", extra={"request_id": "system", "extra_data": {"count": 2}})
+
+    def seed_books_if_needed():
+        sample_books = [
+            {
+                "title": "Clean Code",
+                "author": "Robert C. Martin",
+                "category": "Programming",
+                "description": "A handbook of agile software craftsmanship.",
+                "cover": "https://covers.openlibrary.org/b/isbn/9780132350884-L.jpg",
+            },
+            {
+                "title": "Design Patterns",
+                "author": "Erich Gamma, Richard Helm, Ralph Johnson, John Vlissides",
+                "category": "Software Engineering",
+                "description": "Classic design pattern book for object-oriented software design.",
+                "cover": "https://covers.openlibrary.org/b/isbn/9780201633610-L.jpg",
+            },
+            {
+                "title": "Python Crash Course",
+                "author": "Eric Matthes",
+                "category": "Programming",
+                "description": "A practical introduction to Python programming.",
+                "cover": "https://covers.openlibrary.org/b/isbn/9781593279288-L.jpg",
+            },
+            {
+                "title": "Database System Concepts",
+                "author": "Abraham Silberschatz, Henry F. Korth, S. Sudarshan",
+                "category": "Database",
+                "description": "Foundational concepts for relational database systems.",
+                "cover": "https://covers.openlibrary.org/b/isbn/9780078022159-L.jpg",
+            },
+            {
+                "title": "The Pragmatic Programmer",
+                "author": "Andrew Hunt, David Thomas",
+                "category": "Programming",
+                "description": "Practical lessons for becoming a better software developer.",
+                "cover": "https://covers.openlibrary.org/b/isbn/9780135957059-L.jpg",
+            },
+            {
+                "title": "Refactoring",
+                "author": "Martin Fowler",
+                "category": "Software Engineering",
+                "description": "Improving the design of existing code.",
+                "cover": "https://covers.openlibrary.org/b/isbn/9780134757599-L.jpg",
+            },
+            {
+                "title": "Introduction to Algorithms",
+                "author": "Thomas H. Cormen, Charles E. Leiserson, Ronald L. Rivest, Clifford Stein",
+                "category": "Algorithms",
+                "description": "Comprehensive textbook on algorithms and data structures.",
+                "cover": "https://covers.openlibrary.org/b/isbn/9780262033848-L.jpg",
+            },
+            {
+                "title": "Fluent Python",
+                "author": "Luciano Ramalho",
+                "category": "Programming",
+                "description": "Clear, concise, and effective Python programming techniques.",
+                "cover": "https://covers.openlibrary.org/b/isbn/9781491946008-L.jpg",
+            },
+            {
+                "title": "Effective Java",
+                "author": "Joshua Bloch",
+                "category": "Programming",
+                "description": "Best practices for writing robust Java programs.",
+                "cover": "https://covers.openlibrary.org/b/isbn/9780134685991-L.jpg",
+            },
+            {
+                "title": "Head First Design Patterns",
+                "author": "Eric Freeman, Elisabeth Robson",
+                "category": "Software Engineering",
+                "description": "A visual and practical guide to design patterns.",
+                "cover": "https://covers.openlibrary.org/b/isbn/9780596007126-L.jpg",
+            },
+            {
+                "title": "Domain-Driven Design",
+                "author": "Eric Evans",
+                "category": "Software Architecture",
+                "description": "Tackling complexity in the heart of software.",
+                "cover": "https://covers.openlibrary.org/b/isbn/9780321125217-L.jpg",
+            },
+            {
+                "title": "Clean Architecture",
+                "author": "Robert C. Martin",
+                "category": "Software Architecture",
+                "description": "A craftsman's guide to software structure and design.",
+                "cover": "https://covers.openlibrary.org/b/isbn/9780134494166-L.jpg",
+            },
+            {
+                "title": "Working Effectively with Legacy Code",
+                "author": "Michael C. Feathers",
+                "category": "Software Engineering",
+                "description": "Strategies for safely improving legacy codebases.",
+                "cover": "https://covers.openlibrary.org/b/isbn/9780131177055-L.jpg",
+            },
+            {
+                "title": "You Don't Know JS Yet",
+                "author": "Kyle Simpson",
+                "category": "Web Development",
+                "description": "Deep JavaScript concepts for web developers.",
+                "cover": "https://covers.openlibrary.org/b/isbn/9781091210092-L.jpg",
+            },
+            {
+                "title": "Eloquent JavaScript",
+                "author": "Marijn Haverbeke",
+                "category": "Web Development",
+                "description": "A modern introduction to JavaScript programming.",
+                "cover": "https://covers.openlibrary.org/b/isbn/9781593279509-L.jpg",
+            },
+            {
+                "title": "Learning React",
+                "author": "Alex Banks, Eve Porcello",
+                "category": "Web Development",
+                "description": "Modern patterns for building React applications.",
+                "cover": "https://covers.openlibrary.org/b/isbn/9781492051725-L.jpg",
+            },
+            {
+                "title": "Node.js Design Patterns",
+                "author": "Mario Casciaro, Luciano Mammino",
+                "category": "Backend",
+                "description": "Design and implementation patterns for Node.js applications.",
+                "cover": "https://covers.openlibrary.org/b/isbn/9781839214110-L.jpg",
+            },
+            {
+                "title": "Microservices Patterns",
+                "author": "Chris Richardson",
+                "category": "Software Architecture",
+                "description": "Patterns for building reliable microservice systems.",
+                "cover": "https://covers.openlibrary.org/b/isbn/9781617294549-L.jpg",
+            },
+            {
+                "title": "Building Microservices",
+                "author": "Sam Newman",
+                "category": "Software Architecture",
+                "description": "Designing fine-grained systems for scale and autonomy.",
+                "cover": "https://covers.openlibrary.org/b/isbn/9781491950357-L.jpg",
+            },
+            {
+                "title": "Release It!",
+                "author": "Michael T. Nygard",
+                "category": "DevOps",
+                "description": "Design and deploy production-ready software.",
+                "cover": "https://covers.openlibrary.org/b/isbn/9781680502398-L.jpg",
+            },
+            {
+                "title": "Site Reliability Engineering",
+                "author": "Google SRE Team",
+                "category": "DevOps",
+                "description": "How Google runs production systems.",
+                "cover": "https://covers.openlibrary.org/b/isbn/9781491929124-L.jpg",
+            },
+            {
+                "title": "The DevOps Handbook",
+                "author": "Gene Kim, Jez Humble, Patrick Debois, John Willis",
+                "category": "DevOps",
+                "description": "Creating world-class agility, reliability, and security.",
+                "cover": "https://covers.openlibrary.org/b/isbn/9781942788003-L.jpg",
+            },
+            {
+                "title": "Docker Deep Dive",
+                "author": "Nigel Poulton",
+                "category": "DevOps",
+                "description": "A hands-on guide to Docker and container concepts.",
+                "cover": "https://covers.openlibrary.org/b/isbn/9781521822807-L.jpg",
+            },
+            {
+                "title": "Kubernetes in Action",
+                "author": "Marko Luksa",
+                "category": "DevOps",
+                "description": "A practical guide to deploying applications on Kubernetes.",
+                "cover": "https://covers.openlibrary.org/b/isbn/9781617293726-L.jpg",
+            },
+            {
+                "title": "Terraform Up and Running",
+                "author": "Yevgeniy Brikman",
+                "category": "Cloud",
+                "description": "Writing infrastructure as code with Terraform.",
+                "cover": "https://covers.openlibrary.org/b/isbn/9781098116743-L.jpg",
+            },
+            {
+                "title": "AWS Certified Solutions Architect Study Guide",
+                "author": "Ben Piper, David Clinton",
+                "category": "Cloud",
+                "description": "A study guide for AWS cloud architecture concepts.",
+                "cover": "https://covers.openlibrary.org/b/isbn/9781119713081-L.jpg",
+            },
+            {
+                "title": "Cloud Native Patterns",
+                "author": "Cornelia Davis",
+                "category": "Cloud",
+                "description": "Designing change-tolerant software for cloud platforms.",
+                "cover": "https://covers.openlibrary.org/b/isbn/9781617294297-L.jpg",
+            },
+            {
+                "title": "Designing Data-Intensive Applications",
+                "author": "Martin Kleppmann",
+                "category": "Database",
+                "description": "The big ideas behind reliable, scalable, maintainable systems.",
+                "cover": "https://covers.openlibrary.org/b/isbn/9781449373320-L.jpg",
+            },
+            {
+                "title": "SQL Antipatterns",
+                "author": "Bill Karwin",
+                "category": "Database",
+                "description": "Avoiding common database programming mistakes.",
+                "cover": "https://covers.openlibrary.org/b/isbn/9781934356555-L.jpg",
+            },
+            {
+                "title": "PostgreSQL: Up and Running",
+                "author": "Regina Obe, Leo Hsu",
+                "category": "Database",
+                "description": "A practical guide to PostgreSQL features and administration.",
+                "cover": "https://covers.openlibrary.org/b/isbn/9781491963418-L.jpg",
+            },
+            {
+                "title": "Computer Networking: A Top-Down Approach",
+                "author": "James F. Kurose, Keith W. Ross",
+                "category": "Networking",
+                "description": "Core concepts in computer networking.",
+                "cover": "https://covers.openlibrary.org/b/isbn/9780133594140-L.jpg",
+            },
+            {
+                "title": "Operating System Concepts",
+                "author": "Abraham Silberschatz, Peter B. Galvin, Greg Gagne",
+                "category": "Computer Science",
+                "description": "Foundational operating system concepts.",
+                "cover": "https://covers.openlibrary.org/b/isbn/9781118063330-L.jpg",
+            },
+            {
+                "title": "Computer Systems: A Programmer's Perspective",
+                "author": "Randal E. Bryant, David R. O'Hallaron",
+                "category": "Computer Science",
+                "description": "How computer systems execute programs.",
+                "cover": "https://covers.openlibrary.org/b/isbn/9780134092669-L.jpg",
+            },
+            {
+                "title": "Artificial Intelligence: A Modern Approach",
+                "author": "Stuart Russell, Peter Norvig",
+                "category": "Artificial Intelligence",
+                "description": "A broad introduction to modern AI concepts.",
+                "cover": "https://covers.openlibrary.org/b/isbn/9780134610993-L.jpg",
+            },
+            {
+                "title": "Hands-On Machine Learning",
+                "author": "Aurélien Géron",
+                "category": "Artificial Intelligence",
+                "description": "Machine learning with Scikit-Learn, Keras, and TensorFlow.",
+                "cover": "https://covers.openlibrary.org/b/isbn/9781492032649-L.jpg",
+            },
+            {
+                "title": "Deep Learning",
+                "author": "Ian Goodfellow, Yoshua Bengio, Aaron Courville",
+                "category": "Artificial Intelligence",
+                "description": "A comprehensive introduction to deep learning.",
+                "cover": "https://covers.openlibrary.org/b/isbn/9780262035613-L.jpg",
+            },
+            {
+                "title": "Pattern Recognition and Machine Learning",
+                "author": "Christopher M. Bishop",
+                "category": "Artificial Intelligence",
+                "description": "Probabilistic modeling and machine learning foundations.",
+                "cover": "https://covers.openlibrary.org/b/isbn/9780387310732-L.jpg",
+            },
+            {
+                "title": "The Mythical Man-Month",
+                "author": "Frederick P. Brooks Jr.",
+                "category": "Software Engineering",
+                "description": "Essays on software engineering and project management.",
+                "cover": "https://covers.openlibrary.org/b/isbn/9780201835953-L.jpg",
+            },
+            {
+                "title": "Peopleware",
+                "author": "Tom DeMarco, Timothy Lister",
+                "category": "Project Management",
+                "description": "Productive projects and teams in software development.",
+                "cover": "https://covers.openlibrary.org/b/isbn/9780321934116-L.jpg",
+            },
+            {
+                "title": "The Phoenix Project",
+                "author": "Gene Kim, Kevin Behr, George Spafford",
+                "category": "DevOps",
+                "description": "A novel about IT, DevOps, and helping your business win.",
+                "cover": "https://covers.openlibrary.org/b/isbn/9780988262591-L.jpg",
+            },
+        ]
+
+        existing_titles = {title for (title,) in db.session.query(Book.title).all()}
+        new_books = []
+        updated_count = 0
+
+        for item in sample_books:
+            existing = Book.query.filter_by(title=item["title"]).first()
+            if not existing:
+                new_books.append(Book(**item, available=True))
+            elif (not existing.cover) or existing.cover.startswith("https://placehold.co/"):
+                existing.cover = item["cover"]
+                updated_count += 1
+
+        if new_books:
+            db.session.add_all(new_books)
+        if new_books or updated_count:
+            db.session.commit()
+            logger.info(
+                "Seeded/updated sample books",
+                extra={"request_id": "system", "extra_data": {"inserted": len(new_books), "updated": updated_count}},
+            )
 
     with app.app_context():
         db.create_all()
-        seed_books_if_empty()
+        try:
+            ensure_dev_schema()
+        except SQLAlchemyError as error:
+            db.session.rollback()
+            logger.warning(
+                "Could not auto-update existing schema. You may need to reset the local DB or run migrations.",
+                extra={"request_id": "system", "extra_data": {"error": str(error)}},
+            )
+        seed_users_if_empty()
+        seed_books_if_needed()
 
     @app.errorhandler(404)
     def not_found(_):
@@ -125,6 +523,63 @@ def create_app():
     def health_check():
         return jsonify({"status": "ok", "service": "library-flask-api"})
 
+    @app.post("/auth/register")
+    def register():
+        payload = request.get_json(silent=True) or {}
+        username = (payload.get("username") or "").strip()
+        password = payload.get("password") or ""
+
+        if not username or not password:
+            return jsonify({"message": "username and password are required"}), 400
+        if len(password) < 6:
+            return jsonify({"message": "Password must be at least 6 characters"}), 400
+        if User.query.filter_by(username=username).first():
+            return jsonify({"message": "Username already exists"}), 409
+
+        user = User(
+            username=username,
+            role="user",
+            full_name=(payload.get("fullName") or payload.get("full_name") or "").strip() or None,
+            phone=(payload.get("phone") or "").strip() or None,
+            cccd=(payload.get("cccd") or "").strip() or None,
+        )
+        user.set_password(password)
+        db.session.add(user)
+        db.session.commit()
+
+        token = generate_token(user)
+        log_info("Registered user", user_id=user.id, username=user.username)
+        return jsonify({"message": "Register successfully", "access_token": token, "token_type": "Bearer", "user": user.to_dict()}), 201
+
+    @app.post("/auth/login")
+    def login():
+        payload = request.get_json(silent=True) or {}
+        username = (payload.get("username") or "").strip()
+        password = payload.get("password") or ""
+
+        if not username or not password:
+            return jsonify({"message": "username and password are required"}), 400
+
+        user = User.query.filter_by(username=username).first()
+        if not user or not user.check_password(password):
+            return jsonify({"message": "Invalid username or password"}), 401
+
+        token = generate_token(user)
+        log_info("Login completed", user_id=user.id, username=user.username, role=user.role)
+        return jsonify({"message": "Login successfully", "access_token": token, "token_type": "Bearer", "user": user.to_dict()})
+
+    @app.get("/auth/me")
+    @token_required
+    def me():
+        return jsonify(g.current_user.to_dict())
+
+    @app.get("/users")
+    @admin_required
+    def get_users():
+        users = User.query.order_by(User.id.asc()).all()
+        log_info("Fetched users", count=len(users))
+        return jsonify([user.to_dict() for user in users])
+
     @app.get("/books")
     def get_books():
         books = Book.query.order_by(Book.id.asc()).all()
@@ -138,6 +593,7 @@ def create_app():
         return jsonify(book.to_dict(include_records=True))
 
     @app.post("/books")
+    @admin_required
     def create_book():
         payload = request.get_json(silent=True) or {}
         required_fields = ["title", "author"]
@@ -150,19 +606,21 @@ def create_app():
             author=payload["author"].strip(),
             category=payload.get("category", "General").strip() or "General",
             description=payload.get("description", "").strip(),
+            cover=(payload.get("cover") or "").strip() or None,
             available=bool(payload.get("available", True)),
         )
         db.session.add(book)
         db.session.commit()
-        log_info("Created book", book_id=book.id)
+        log_info("Created book", book_id=book.id, admin_id=g.current_user.id)
         return jsonify(book.to_dict()), 201
 
     @app.put("/books/<int:book_id>")
+    @admin_required
     def update_book(book_id):
         book = Book.query.get_or_404(book_id)
         payload = request.get_json(silent=True) or {}
 
-        for field in ["title", "author", "category", "description"]:
+        for field in ["title", "author", "category", "description", "cover"]:
             if field in payload:
                 value = payload[field]
                 setattr(book, field, value.strip() if isinstance(value, str) else value)
@@ -170,25 +628,29 @@ def create_app():
             book.available = bool(payload["available"])
 
         db.session.commit()
-        log_info("Updated book", book_id=book.id)
+        log_info("Updated book", book_id=book.id, admin_id=g.current_user.id)
         return jsonify(book.to_dict())
 
     @app.delete("/books/<int:book_id>")
+    @admin_required
     def delete_book(book_id):
         book = Book.query.get_or_404(book_id)
         db.session.delete(book)
         db.session.commit()
-        log_info("Deleted book", book_id=book_id)
+        log_info("Deleted book", book_id=book_id, admin_id=g.current_user.id)
         return jsonify({"message": "Book deleted successfully"})
 
     @app.post("/borrow")
+    @token_required
     def borrow_book():
         payload = request.get_json(silent=True) or {}
-        book_id = payload.get("book_id")
-        user_id = payload.get("user_id")
+        book_id = payload.get("book_id") or payload.get("bookId")
+        user_id = get_request_user_id(payload)
 
-        if not book_id or not user_id:
-            return jsonify({"message": "book_id and user_id are required"}), 400
+        if not book_id:
+            return jsonify({"message": "book_id is required"}), 400
+        if not user_id:
+            return jsonify({"message": "user_id is required"}), 400
 
         try:
             book = Book.query.get(book_id)
@@ -199,7 +661,16 @@ def create_app():
                 return jsonify({"message": "Book is not available"}), 409
 
             book.available = False
-            record = BorrowRecord(book_id=book.id, user_id=str(user_id), status="borrowed")
+            record = BorrowRecord(
+                book_id=book.id,
+                user_id=str(user_id),
+                customer_name=payload.get("customerName") or payload.get("customer_name") or g.current_user.full_name,
+                phone=payload.get("phone") or g.current_user.phone,
+                cccd=payload.get("cccd") or g.current_user.cccd,
+                expected_return_date=payload.get("returnDate") or payload.get("expectedReturnDate"),
+                deposit=payload.get("deposit", 150000),
+                status="active",
+            )
             db.session.add(record)
             db.session.commit()
             log_info("Borrow request completed", book_id=book_id, user_id=user_id, borrow_record_id=record.id)
@@ -210,43 +681,66 @@ def create_app():
             return jsonify({"message": "Borrow request failed"}), 500
 
     @app.post("/return")
+    @token_required
     def return_book():
         payload = request.get_json(silent=True) or {}
-        book_id = payload.get("book_id")
-        user_id = payload.get("user_id")
+        book_id = payload.get("book_id") or payload.get("bookId")
+        record_id = payload.get("record_id") or payload.get("recordId")
+        user_id = get_request_user_id(payload)
 
-        if not book_id or not user_id:
-            return jsonify({"message": "book_id and user_id are required"}), 400
+        if not book_id and not record_id:
+            return jsonify({"message": "book_id or record_id is required"}), 400
 
         try:
-            book = Book.query.get(book_id)
-            if not book:
-                return jsonify({"message": "Book not found"}), 404
+            active_record = None
+            if record_id:
+                active_record = BorrowRecord.query.get(record_id)
+                if active_record and g.current_user.role != "admin" and active_record.user_id != str(g.current_user.id):
+                    return jsonify({"message": "You can only return your own borrow record"}), 403
+            else:
+                filters = [
+                    BorrowRecord.book_id == int(book_id),
+                    BorrowRecord.status.in_(["active", "borrowed"]),
+                ]
+                if g.current_user.role != "admin":
+                    filters.append(BorrowRecord.user_id == str(g.current_user.id))
+                elif user_id:
+                    filters.append(BorrowRecord.user_id == str(user_id))
 
-            active_record = BorrowRecord.query.filter_by(
-                book_id=book.id,
-                user_id=str(user_id),
-                status="borrowed",
-            ).order_by(BorrowRecord.borrow_date.desc()).first()
+                active_record = BorrowRecord.query.filter(*filters).order_by(BorrowRecord.borrow_date.desc()).first()
 
             if not active_record:
-                return jsonify({"message": "No active borrow record found for this user and book"}), 409
+                return jsonify({"message": "No active borrow record found"}), 409
+            if active_record.status == "returned":
+                return jsonify({"message": "This book has already been returned"}), 409
+
+            book = Book.query.get(active_record.book_id)
+            if not book:
+                return jsonify({"message": "Book not found"}), 404
 
             active_record.status = "returned"
             active_record.return_date = datetime.now(timezone.utc)
             book.available = True
             db.session.commit()
-            log_info("Return request completed", book_id=book_id, user_id=user_id, borrow_record_id=active_record.id)
+            log_info("Return request completed", book_id=book.id, user_id=active_record.user_id, borrow_record_id=active_record.id)
             return jsonify({"message": "Return book successfully", "book": book.to_dict(), "record": active_record.to_dict()})
         except SQLAlchemyError as error:
             db.session.rollback()
-            log_error("Return request failed", error=str(error), book_id=book_id, user_id=user_id)
+            log_error("Return request failed", error=str(error), book_id=book_id, record_id=record_id)
             return jsonify({"message": "Return request failed"}), 500
 
     @app.get("/borrow-records")
+    @admin_required
     def get_borrow_records():
         records = BorrowRecord.query.order_by(BorrowRecord.id.desc()).all()
-        log_info("Fetched borrow records", count=len(records))
+        log_info("Fetched borrow records", count=len(records), admin_id=g.current_user.id)
+        return jsonify([record.to_dict() for record in records])
+
+    @app.get("/my-borrow-records")
+    @token_required
+    def get_my_borrow_records():
+        records = BorrowRecord.query.filter_by(user_id=str(g.current_user.id)).order_by(BorrowRecord.id.desc()).all()
+        log_info("Fetched my borrow records", count=len(records), user_id=g.current_user.id)
         return jsonify([record.to_dict() for record in records])
 
     return app

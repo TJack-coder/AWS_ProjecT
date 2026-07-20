@@ -33,3 +33,4 @@ export const libraryApi = {
   returnBook: (bookId, userId) => request('/return', { method: 'POST', body: JSON.stringify({ book_id: bookId, user_id: userId }) }),
   getBorrowRecords: () => request('/borrow-records'),
 };
+

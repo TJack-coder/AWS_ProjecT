@@ -1,0 +1,28 @@
+UPLOAD TO THE ROOT OF develop_2.0:
+
+[required]
+backend/
+frontend/
+.github/
+deploy/
+.ebextensions/
+.platform/
+cloudwatch/
+aws/
+docker-compose.yml
+.env.example
+.gitignore
+README_EMPTY_BRANCH_VI.md
+
+[do not upload]
+.env
+.git/
+node_modules/
+.venv/
+__pycache__/
+AWS access keys
+
+After upload:
+1) Run aws/setup-github-oidc.sh in AWS CloudShell.
+2) Add GitHub Variables AWS_ROLE_ARN and EB_BUCKET.
+3) Actions -> Deploy AWS Library -> Run workflow.

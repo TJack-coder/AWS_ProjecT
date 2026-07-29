@@ -4,4 +4,9 @@ Flask-SQLAlchemy==3.1.1
 psycopg2-binary==2.9.9
 gunicorn==22.0.0
 python-dotenv==1.0.1
-PyJWT==2.8.0
+PyJWT==2.10.1
+qrcode[pil]==7.4.2
+boto3==1.35.24
+openpyxl==3.1.5
+reportlab==4.2.2
+aws-xray-sdk==2.14.0

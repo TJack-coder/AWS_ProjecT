@@ -1,0 +1,21 @@
+import React, { useMemo, useState } from 'react';
+import { Download, FileClock, KeyRound, Search, ShieldAlert, UserCheck, UserX } from 'lucide-react';
+import { libraryApi } from '../api';
+
+export default function AdminOpsTab({ users, audits, onRefresh }) {
+  const [section, setSection] = useState('users');
+  const [search, setSearch] = useState('');
+  const filteredUsers = useMemo(() => users.filter((item) => [item.fullName, item.username, item.email, item.phone].filter(Boolean).join(' ').toLowerCase().includes(search.toLowerCase())), [users, search]);
+  const run = async (fn) => { try { await fn(); await onRefresh(); } catch (error) { alert(error.message); } };
+  const reset = async (user) => {
+    const password = window.prompt(`Mật khẩu mới cho ${user.username} (ít nhất 8 ký tự):`);
+    if (password) await run(() => libraryApi.resetUserPassword(user.id, password));
+  };
+  return <div className="admin-ops-page">
+    <div className="page-header"><div><p className="eyebrow dark">ADMIN CONTROL CENTER</p><h1>Quản trị hệ thống</h1><p>Quản lý độc giả, nhật ký hoạt động và xuất báo cáo nghiệp vụ.</p></div></div>
+    <div className="subtabs"><button className={section==='users'?'active':''} onClick={()=>setSection('users')}>Tài khoản</button><button className={section==='audit'?'active':''} onClick={()=>setSection('audit')}>Audit log</button><button className={section==='reports'?'active':''} onClick={()=>setSection('reports')}>Báo cáo</button></div>
+    {section === 'users' && <section className="panel no-pad"><div className="management-toolbar"><div className="search-box toolbar-search"><Search size={18}/><input value={search} onChange={(e)=>setSearch(e.target.value)} placeholder="Tìm độc giả..."/></div></div><div className="table-container"><table className="data-table"><thead><tr><th>Tài khoản</th><th>Liên hệ</th><th>Vai trò</th><th>Trạng thái</th><th>Hành động</th></tr></thead><tbody>{filteredUsers.map((item)=><tr key={item.id}><td><strong>{item.fullName || item.username}</strong><small className="block-muted">@{item.username}</small></td><td>{item.email || 'Chưa có email'}<small className="block-muted">{item.phone || 'Chưa có SĐT'}</small></td><td><span className={`badge ${item.role==='admin'?'admin':'available'}`}>{item.role}</span></td><td><span className={`badge ${item.isActive?'available':'archived'}`}>{item.isActive?'Hoạt động':'Đã khóa'}</span></td><td><div className="action-cell"><button className="icon-btn-small" title="Đặt lại mật khẩu" onClick={()=>reset(item)}><KeyRound size={17}/></button>{item.role!=='admin' && <button className={`icon-btn-small ${item.isActive?'delete':'restore'}`} title={item.isActive?'Khóa tài khoản':'Mở khóa'} onClick={()=>run(()=>libraryApi.updateUserStatus(item.id,!item.isActive))}>{item.isActive?<UserX size={17}/>:<UserCheck size={17}/>}</button>}</div></td></tr>)}</tbody></table></div></section>}
+    {section === 'audit' && <section className="panel no-pad"><div className="table-container"><table className="data-table"><thead><tr><th>Thời gian</th><th>Người dùng</th><th>Hành động</th><th>Đối tượng</th><th>Request ID</th></tr></thead><tbody>{audits.map((item)=><tr key={item.id}><td>{new Date(item.createdAt).toLocaleString('vi-VN')}</td><td>{item.username || 'system'}</td><td><span className="audit-action">{item.action}</span></td><td>{item.entityType || '—'} {item.entityId ? `#${item.entityId}`:''}</td><td className="font-mono small-text">{item.requestId?.slice(0,12) || '—'}</td></tr>)}{!audits.length&&<tr><td colSpan="5"><div className="empty-state"><FileClock size={35}/><p>Chưa có nhật ký.</p></div></td></tr>}</tbody></table></div></section>}
+    {section === 'reports' && <section className="report-grid"><article className="panel report-card"><Download size={28}/><h2>Báo cáo mượn trả</h2><p>Xuất danh sách phiếu, tình trạng sách và tiền phạt.</p><div className="report-buttons"><button onClick={()=>libraryApi.downloadReport('csv')}>CSV</button><button onClick={()=>libraryApi.downloadReport('xlsx')}>Excel</button><button onClick={()=>libraryApi.downloadReport('pdf')}>PDF</button></div></article><article className="panel report-card muted-card"><ShieldAlert size={28}/><h2>Lưu ý dữ liệu cá nhân</h2><p>Báo cáo chỉ dành cho quản trị viên. Hãy bảo vệ tệp có CCCD và số điện thoại theo quy định nội bộ.</p></article></section>}
+  </div>;
+}

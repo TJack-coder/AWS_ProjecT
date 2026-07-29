@@ -1,0 +1,22 @@
+AWS Elastic Beanstalk source bundle for the Library Borrowing System.
+
+Platform: Docker
+Platform branch: Docker running on 64bit Amazon Linux 2023
+Application entry point: docker-compose.yml at ZIP root
+Public service: frontend container on host port 80
+API route: /api/* -> backend:5000/*
+Health route: /health -> backend:5000/health
+
+Do not add a .env file to this ZIP. Elastic Beanstalk creates .env from the
+Environment properties entered in the console. docker-compose.yml references it.
+
+This bundle includes PostgreSQL in a container for Sprint 0/demo use. EC2 local
+storage is not durable across instance replacement. Use Amazon RDS PostgreSQL for
+production or persistent data.
+
+Observability additions:
+- .ebextensions/01-observability.config enables enhanced health and log streaming.
+- .platform hooks install/configure CloudWatch Agent and Nginx healthd storage.
+- backend emits structured request, borrow, and return events.
+- cloudwatch/setup_phase1.sh creates metric filters, alarms, and dashboard.
+- See PHASE1_CLOUDWATCH_SETUP.md for the one-time CloudShell command.

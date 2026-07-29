@@ -1,0 +1,262 @@
+name: Deploy AWS Library
+
+on:
+  push:
+    branches:
+      - develop_2.0
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: aws-library-elastic-beanstalk
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ap-southeast-2
+  AWS_ACCOUNT_ID: "521024927908"
+  BACKEND_REPOSITORY: aws-library-backend
+  FRONTEND_REPOSITORY: aws-library-frontend
+  EB_APPLICATION: aws-library-system
+  EB_ENVIRONMENT: Aws-library-system-env
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6
+
+      - name: Verify required files
+        run: |
+          test -f backend/Dockerfile
+          test -f frontend/Dockerfile
+          test -f frontend/package-lock.json
+          test -f deploy/beanstalk/docker-compose.template.yml
+          test -d deploy/beanstalk/.ebextensions
+          test -d deploy/beanstalk/.platform
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Check backend Python syntax
+        run: python -m compileall -q backend
+
+      - name: Install backend test dependencies
+        working-directory: backend
+        run: pip install -r requirements-dev.txt
+
+      - name: Run backend API tests
+        working-directory: backend
+        env:
+          DATABASE_URL: sqlite:////tmp/aws-library-deploy-ci.db
+          JWT_SECRET_KEY: ci-test-secret
+        run: PYTHONPATH=. python -m pytest -q
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build frontend for verification
+        working-directory: frontend
+        env:
+          VITE_API_BASE_URL: /api
+        run: npm run build
+
+  deploy:
+    needs: validate
+    if: ${{ vars.AWS_ROLE_ARN != '' && vars.EB_BUCKET != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6
+
+      - name: Configure AWS credentials with GitHub OIDC
+        uses: aws-actions/configure-aws-credentials@v6.2.0
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          allowed-account-ids: ${{ env.AWS_ACCOUNT_ID }}
+          role-session-name: aws-library-github-deploy
+
+      - name: Confirm AWS identity
+        run: aws sts get-caller-identity
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2.1.6
+
+      - name: Set deployment values
+        shell: bash
+        run: |
+          ECR_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+          SHORT_SHA="${GITHUB_SHA:0:12}"
+          VERSION_LABEL="gh-${SHORT_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          S3_KEY="aws-library-system/${VERSION_LABEL}.zip"
+
+          echo "IMAGE_TAG=${GITHUB_SHA}" >> "$GITHUB_ENV"
+          echo "ECR_REGISTRY=${ECR_REGISTRY}" >> "$GITHUB_ENV"
+          echo "VERSION_LABEL=${VERSION_LABEL}" >> "$GITHUB_ENV"
+          echo "S3_KEY=${S3_KEY}" >> "$GITHUB_ENV"
+
+      - name: Build and push backend image
+        shell: bash
+        run: |
+          if aws ecr describe-images \
+            --repository-name "${BACKEND_REPOSITORY}" \
+            --image-ids imageTag="${IMAGE_TAG}" \
+            --region "${AWS_REGION}" >/dev/null 2>&1
+          then
+            echo "Backend image ${IMAGE_TAG} already exists; skipping push."
+          else
+            docker build \
+              --platform linux/amd64 \
+              --tag "${ECR_REGISTRY}/${BACKEND_REPOSITORY}:${IMAGE_TAG}" \
+              ./backend
+
+            docker push \
+              "${ECR_REGISTRY}/${BACKEND_REPOSITORY}:${IMAGE_TAG}"
+          fi
+
+      - name: Build and push frontend image
+        shell: bash
+        run: |
+          if aws ecr describe-images \
+            --repository-name "${FRONTEND_REPOSITORY}" \
+            --image-ids imageTag="${IMAGE_TAG}" \
+            --region "${AWS_REGION}" >/dev/null 2>&1
+          then
+            echo "Frontend image ${IMAGE_TAG} already exists; skipping push."
+          else
+            docker build \
+              --platform linux/amd64 \
+              --build-arg VITE_API_BASE_URL=/api \
+              --tag "${ECR_REGISTRY}/${FRONTEND_REPOSITORY}:${IMAGE_TAG}" \
+              ./frontend
+
+            docker push \
+              "${ECR_REGISTRY}/${FRONTEND_REPOSITORY}:${IMAGE_TAG}"
+          fi
+
+      - name: Generate Elastic Beanstalk bundle
+        shell: bash
+        run: |
+          rm -rf deployment-bundle deployment.zip
+          mkdir -p deployment-bundle
+
+          sed "s/__IMAGE_TAG__/${IMAGE_TAG}/g" \
+            deploy/beanstalk/docker-compose.template.yml \
+            > deployment-bundle/docker-compose.yml
+
+          cp -R deploy/beanstalk/.ebextensions deployment-bundle/
+          cp -R deploy/beanstalk/.platform deployment-bundle/
+
+          if grep -q "__IMAGE_TAG__" deployment-bundle/docker-compose.yml; then
+            echo "IMAGE_TAG placeholder was not replaced."
+            exit 1
+          fi
+
+          (
+            cd deployment-bundle
+            zip -qr ../deployment.zip .
+          )
+
+          unzip -l deployment.zip
+
+      - name: Upload deployment bundle to S3
+        run: |
+          aws s3 cp deployment.zip \
+            "s3://${{ vars.EB_BUCKET }}/${S3_KEY}" \
+            --region "${AWS_REGION}"
+
+      - name: Create Elastic Beanstalk application version
+        run: |
+          aws elasticbeanstalk create-application-version \
+            --application-name "${EB_APPLICATION}" \
+            --version-label "${VERSION_LABEL}" \
+            --description "GitHub commit ${GITHUB_SHA}" \
+            --source-bundle \
+              S3Bucket="${{ vars.EB_BUCKET }}",S3Key="${S3_KEY}" \
+            --region "${AWS_REGION}"
+
+      - name: Deploy application version
+        run: |
+          aws elasticbeanstalk update-environment \
+            --environment-name "${EB_ENVIRONMENT}" \
+            --version-label "${VERSION_LABEL}" \
+            --region "${AWS_REGION}"
+
+      - name: Wait for Elastic Beanstalk
+        run: |
+          aws elasticbeanstalk wait environment-updated \
+            --environment-names "${EB_ENVIRONMENT}" \
+            --region "${AWS_REGION}"
+
+      - name: Verify deployed version and health
+        shell: bash
+        run: |
+          SUCCESS=false
+
+          for ATTEMPT in $(seq 1 30); do
+            read -r STATUS HEALTH HEALTH_STATUS RUNNING_VERSION CNAME <<< "$(
+              aws elasticbeanstalk describe-environments \
+                --environment-names "${EB_ENVIRONMENT}" \
+                --region "${AWS_REGION}" \
+                --query "Environments[0].[Status,Health,HealthStatus,VersionLabel,CNAME]" \
+                --output text
+            )"
+
+            echo "Attempt=${ATTEMPT} Status=${STATUS} Health=${HEALTH} HealthStatus=${HEALTH_STATUS} Version=${RUNNING_VERSION}"
+
+            if [ "${STATUS}" = "Ready" ] \
+              && [ "${RUNNING_VERSION}" = "${VERSION_LABEL}" ] \
+              && { [ "${HEALTH}" = "Green" ] || [ "${HEALTH_STATUS}" = "Ok" ]; }
+            then
+              SUCCESS=true
+              echo "CNAME=${CNAME}" >> "$GITHUB_ENV"
+              break
+            fi
+
+            sleep 10
+          done
+
+          if [ "${SUCCESS}" != "true" ]; then
+            echo "Elastic Beanstalk did not become healthy."
+            exit 1
+          fi
+
+      - name: External health check
+        run: |
+          curl \
+            --fail \
+            --show-error \
+            --silent \
+            --retry 12 \
+            --retry-delay 10 \
+            --retry-all-errors \
+            "http://${CNAME}/health"
+          echo
+
+      - name: Print Elastic Beanstalk events on failure
+        if: failure()
+        run: |
+          aws elasticbeanstalk describe-events \
+            --environment-name "${EB_ENVIRONMENT}" \
+            --region "${AWS_REGION}" \
+            --max-items 30 \
+            --query "Events[*].[EventDate,Severity,Message]" \
+            --output table || true

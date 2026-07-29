@@ -1,49 +1,69 @@
 services:
   db:
     image: postgres:16-alpine
-    container_name: library_postgres
     restart: unless-stopped
+    env_file:
+      - .env
     environment:
-      POSTGRES_DB: library_db
-      POSTGRES_USER: library_user
-      POSTGRES_PASSWORD: library_password
-    ports:
-      - "5432:5432"
+      POSTGRES_DB: ${POSTGRES_DB:-library_db}
+      POSTGRES_USER: ${POSTGRES_USER:-library_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-library_password}
+    expose:
+      - "5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U library_user -d library_db"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-library_user} -d ${POSTGRES_DB:-library_db}"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
 
   backend:
     build:
       context: ./backend
-    container_name: library_backend
     restart: unless-stopped
+    env_file:
+      - .env
     environment:
-      DATABASE_URL: postgresql://library_user:library_password@db:5432/library_db
-      SERVICE_NAME: library-flask-api
-      LOG_LEVEL: INFO
-      PORT: 5000
-    ports:
-      - "5000:5000"
+      DATABASE_URL: ${DATABASE_URL:-postgresql://library_user:library_password@db:5432/library_db}
+      PORT: "5000"
+      FLASK_DEBUG: "false"
+      APP_LOG_FILE: /var/log/aws-library/backend.json.log
+      UPLOAD_FOLDER: /app/uploads
+      AWS_IMAGE_BUCKET: ${AWS_IMAGE_BUCKET:-}
+      AWS_IMAGE_BASE_URL: ${AWS_IMAGE_BASE_URL:-}
+      SES_FROM_EMAIL: ${SES_FROM_EMAIL:-}
+      ENABLE_XRAY: ${ENABLE_XRAY:-false}
+    volumes:
+      # Pure JSON application log, streamed by the unified CloudWatch Agent.
+      - "${APP_LOG_HOST_DIR:-./.runtime/logs/app}:/var/log/aws-library"
+      - "${UPLOAD_HOST_DIR:-./.runtime/uploads}:/app/uploads"
+    expose:
+      - "5000"
     depends_on:
       db:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
 
   frontend:
     build:
       context: ./frontend
       args:
-        VITE_API_BASE_URL: http://localhost:5000
-    container_name: library_frontend
+        VITE_API_BASE_URL: /api
     restart: unless-stopped
     ports:
-      - "3000:80"
+      - "80:80"
+    volumes:
+      # Enhanced Health reads Nginx healthd files from the EC2 host.
+      - "${NGINX_LOG_HOST_DIR:-./.runtime/logs/nginx}:/var/log/nginx"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
 
 volumes:
   postgres_data:

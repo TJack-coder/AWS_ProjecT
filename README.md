@@ -1,242 +1,200 @@
-# Library Borrowing System - Sprint 0
+# CloudLibrary — Professional V3
 
-Ứng dụng mượn/trả sách cơ bản theo Sprint 0 của kế hoạch AWS Library System.
+CloudLibrary là hệ thống quản lý thư viện dùng **React + Flask + PostgreSQL**, đóng gói bằng Docker và tự động triển khai lên **Amazon Elastic Beanstalk** qua GitHub Actions, Amazon ECR và GitHub OIDC.
 
-## 1. Tech stack
+![CloudLibrary overview](docs/assets/cloudlibrary-overview.png)
 
-| Layer | Tech |
-|---|---|
-| Frontend | React + Vite |
-| Backend API | Flask |
-| Database | PostgreSQL |
-| Container | Docker + Docker Compose |
-| CI/CD | GitHub Actions |
-| Logging | Structured JSON logs từ Flask |
+## Những phần đã hoàn thiện
 
-## 2. Chức năng đã làm
+### Trải nghiệm và nhận diện
 
-- Xem danh sách sách.
-- Xem chi tiết sách.
-- Thêm sách mới.
-- Cập nhật sách.
-- Xóa sách.
-- Mượn sách.
-- Trả sách.
-- Xem lịch sử mượn/trả.
-- Log request theo dạng JSON.
-- Dockerize frontend, backend và PostgreSQL.
-- GitHub Actions CI cơ bản.
-- GitHub Actions deploy template cho AWS Elastic Beanstalk.
+- Giao diện đăng nhập responsive, hiện/ẩn mật khẩu, ghi nhớ đăng nhập, loading và thông báo lỗi rõ ràng.
+- Đã **xóa hoàn toàn hai thẻ tài khoản demo** khỏi giao diện đăng nhập.
+- Có đăng ký độc giả, quên mật khẩu, hồ sơ cá nhân, ảnh đại diện và đổi mật khẩu.
+- Favicon, metadata, footer, điều hướng không dùng `/#`; URL frontend theo dạng `/dashboard`, `/books`, `/my-books`, `/profile`.
+- Nginx có SPA fallback để mở trực tiếp các URL trên mà không lỗi 404.
 
-## 3. Cấu trúc thư mục
+### Kho sách và hình ảnh
 
-```text
-library-borrowing-system-sprint0/
-├── backend/
-│   ├── app.py
-│   ├── models.py
-│   ├── requirements.txt
-│   ├── Dockerfile
-│   └── .env.example
-├── frontend/
-│   ├── src/
-│   │   ├── api.js
-│   │   ├── main.jsx
-│   │   └── styles.css
-│   ├── package.json
-│   ├── Dockerfile
-│   ├── nginx.conf
-│   └── .env.example
-├── docs/
-│   ├── API.md
-│   └── BRANCHING_STRATEGY.md
-├── .github/
-│   ├── workflows/
-│   │   ├── ci.yml
-│   │   └── deploy-beanstalk.yml
-│   ├── CODEOWNERS
-│   └── PULL_REQUEST_TEMPLATE/
-├── docker-compose.yml
-├── .env.example
-└── README.md
+- 60 đầu sách, mỗi đầu sách có ảnh bìa **lưu trực tiếp trong source** tại `frontend/public/assets/covers/`; không tải ảnh từ URL bên ngoài.
+- Ảnh hero và favicon cũng là tài nguyên local.
+- Admin chọn ảnh bìa hoặc ảnh đại diện trực tiếp từ máy.
+- Backend hỗ trợ hai chế độ lưu ảnh:
+  - local volume cho chạy thử;
+  - Amazon S3 khi cấu hình `AWS_IMAGE_BUCKET` và `AWS_IMAGE_BASE_URL`.
+- CRUD sách đầy đủ, số lượng bản, lưu trữ mềm, khôi phục, ISBN, NXB, năm xuất bản, vị trí kệ.
+- Import danh mục bằng CSV/XLSX; export CSV/XLSX/PDF.
+- Tìm kiếm, lọc, sắp xếp, phân trang và tìm kiếm thông minh.
+- QR cho từng sách; có thể đọc QR từ một ảnh trên Chrome hỗ trợ `BarcodeDetector`.
+
+### Mượn, trả, gia hạn và đặt trước
+
+- User tự mượn bằng thông tin hồ sơ, không được sửa danh tính trên phiếu.
+- Admin có thể chọn đúng độc giả khi lập phiếu.
+- User chỉ **gửi yêu cầu trả**; admin kiểm tra sách rồi mới xác nhận nhận lại.
+- Khi nhận sách, admin ghi tình trạng, tiền phạt và ghi chú.
+- User gửi yêu cầu gia hạn; admin duyệt hoặc từ chối.
+- Tối đa hai lần gia hạn; không gia hạn sách quá hạn.
+- Đặt trước theo hàng đợi, hủy đặt trước và thông báo sách đã sẵn sàng.
+- Cảnh báo sắp đến hạn, quá hạn và trung tâm thông báo.
+
+### Quản trị và báo cáo
+
+- Dashboard theo vai trò với số đầu sách, số bản, sách đang mượn, quá hạn, đặt trước, tiền phạt và xu hướng 14 ngày.
+- Quản lý tài khoản: khóa/mở khóa, đặt lại mật khẩu.
+- Audit log có người thực hiện, hành động, đối tượng, request ID, IP và thời gian.
+- Xuất báo cáo mượn trả CSV, Excel và PDF.
+- Chat assistant tra cứu tình trạng, sách đang mượn, hạn trả và gợi ý sách.
+
+### Bảo mật
+
+- JWT, rate limit đăng nhập, khóa tạm tài khoản sau nhiều lần sai.
+- Security headers, request ID, CORS cấu hình bằng biến môi trường.
+- CCCD và số điện thoại được che ở dữ liệu hiển thị nghiệp vụ.
+- Không ghi secret trong repository; `.env` và thư mục upload runtime bị ignore.
+- GitHub Actions đăng nhập AWS qua OIDC, không lưu access key dài hạn.
+
+### AWS và vận hành
+
+- Build hai image và push lên ECR bằng commit SHA.
+- Tạo Elastic Beanstalk application version, deploy và health check tự động.
+- Script OIDC đã chứa các quyền Beanstalk/CloudFormation/S3/Auto Scaling từng cần trong quá trình triển khai.
+- CloudWatch JSON logs, metric filters, CPU/memory/latency/error alarms, Top API Logs Insights widget.
+- Có thể gắn SNS vào alarm bằng `SNS_TOPIC_ARN`.
+- Có tùy chọn AWS X-Ray (`ENABLE_XRAY=true`), Amazon SES và Amazon S3.
+- `DATABASE_URL` có thể trỏ sang Amazon RDS mà không phải sửa source.
+
+> Custom domain, chứng chỉ ACM và HTTPS listener là hạ tầng bên ngoài source nên được để lại cho giai đoạn tiếp theo theo yêu cầu.
+
+## Cấu hình ảnh local hoặc Amazon S3
+
+### Local
+
+```env
+UPLOAD_FOLDER=/app/uploads
+AWS_IMAGE_BUCKET=
+AWS_IMAGE_BASE_URL=
 ```
 
-## 4. Cách chạy bằng Docker Compose
+### Amazon S3
 
-Yêu cầu máy đã cài:
+```env
+AWS_REGION=ap-southeast-2
+AWS_IMAGE_BUCKET=your-cloudlibrary-image-bucket
+AWS_IMAGE_BASE_URL=https://your-cloudfront-domain.example
+```
 
-- Docker
-- Docker Compose
+Role chạy backend cần tối thiểu quyền `s3:PutObject` cho prefix chứa ảnh. Nên phân phối ảnh qua CloudFront hoặc bucket policy chỉ đọc, không bật public ACL tùy tiện.
 
-Chạy toàn bộ hệ thống:
+## Chuyển database sang Amazon RDS
+
+Tạo RDS PostgreSQL, mở Security Group 5432 chỉ từ Beanstalk, rồi đặt:
+
+```env
+DATABASE_URL=postgresql://USERNAME:PASSWORD@RDS_ENDPOINT:5432/DATABASE_NAME
+```
+
+Khi đã dùng RDS, xóa service `db` và `depends_on: db` khỏi bundle Beanstalk nếu không còn cần PostgreSQL container.
+
+## Email khôi phục mật khẩu
+
+```env
+SES_FROM_EMAIL=no-reply@your-verified-domain.example
+RESET_URL_BASE=https://your-domain.example/reset-password
+EXPOSE_RESET_TOKEN=false
+```
+
+Email hoặc domain gửi phải được xác minh trong Amazon SES cùng region.
+
+## CloudWatch và SNS
 
 ```bash
-docker compose up --build
+export SNS_TOPIC_ARN=arn:aws:sns:ap-southeast-2:ACCOUNT_ID:cloudlibrary-alerts
+./cloudwatch/setup_phase1.sh
 ```
 
-Sau khi chạy xong:
+Để thử trước mà chưa dùng SNS, chạy script không đặt `SNS_TOPIC_ARN`.
 
-- Frontend: http://localhost:3000
-- Backend API: http://localhost:5000
-- Health check: http://localhost:5000/health
-- PostgreSQL: localhost:5432
+## Chạy local
 
-Dừng hệ thống:
+```bash
+cp .env.example .env
+# Thay mật khẩu, JWT secret và các biến cần thiết.
+docker compose up --build -d
+```
+
+Mở `http://localhost` và kiểm tra:
+
+```bash
+curl http://localhost/health
+```
+
+Dừng:
 
 ```bash
 docker compose down
 ```
 
-Dừng và xóa luôn dữ liệu database local:
-
-```bash
-docker compose down -v
-```
-
-## 5. Cách chạy local không dùng Docker
-
-### 5.1 Backend Flask
-
-Tạo môi trường Python:
+## Kiểm thử
 
 ```bash
 cd backend
-python -m venv .venv
+python -m pip install -r requirements-dev.txt
+PYTHONPATH=. python -m pytest -q
 ```
 
-Kích hoạt môi trường:
-
-Windows:
-
-```bash
-.venv\Scripts\activate
-```
-
-macOS/Linux:
-
-```bash
-source .venv/bin/activate
-```
-
-Cài thư viện:
-
-```bash
-pip install -r requirements.txt
-```
-
-Tạo file `.env` từ `.env.example`, sau đó chạy:
-
-```bash
-python app.py
-```
-
-### 5.2 Frontend React
+Frontend:
 
 ```bash
 cd frontend
-npm install
-npm run dev
+npm ci
+VITE_API_BASE_URL=/api npm run build
 ```
 
-Frontend chạy ở:
+## Auto deploy lên branch `develop_2.0`
+
+Repository GitHub cần hai Variables:
 
 ```text
-http://localhost:5173
+AWS_ROLE_ARN
+EB_BUCKET
 ```
 
-## 6. API chính
-
-| Method | Endpoint | Chức năng |
-|---|---|---|
-| GET | `/health` | Kiểm tra backend có chạy không |
-| GET | `/books` | Lấy danh sách sách |
-| GET | `/books/{id}` | Lấy chi tiết sách |
-| POST | `/books` | Thêm sách |
-| PUT | `/books/{id}` | Cập nhật sách |
-| DELETE | `/books/{id}` | Xóa sách |
-| POST | `/borrow` | Mượn sách |
-| POST | `/return` | Trả sách |
-| GET | `/borrow-records` | Xem lịch sử mượn/trả |
-
-Ví dụ mượn sách:
+Sau khi chỉnh code:
 
 ```bash
-curl -X POST http://localhost:5000/borrow \
-  -H "Content-Type: application/json" \
-  -d '{"book_id": 1, "user_id": "U001"}'
+git switch develop_2.0
+git pull --rebase origin develop_2.0
+git add -A
+git commit -m "feat: deploy CloudLibrary Professional V3"
+git push origin develop_2.0
 ```
 
-Ví dụ trả sách:
-
-```bash
-curl -X POST http://localhost:5000/return \
-  -H "Content-Type: application/json" \
-  -d '{"book_id": 1, "user_id": "U001"}'
-```
-
-## 7. Database schema
-
-### books
-
-| Column | Type | Meaning |
-|---|---|---|
-| id | Integer | Mã sách |
-| title | String | Tên sách |
-| author | String | Tác giả |
-| category | String | Thể loại |
-| description | Text | Mô tả |
-| available | Boolean | Còn sẵn hay đang được mượn |
-| created_at | DateTime | Ngày tạo |
-| updated_at | DateTime | Ngày cập nhật |
-
-### borrow_records
-
-| Column | Type | Meaning |
-|---|---|---|
-| id | Integer | Mã giao dịch |
-| book_id | Integer | Mã sách |
-| user_id | String | Mã người dùng |
-| borrow_date | DateTime | Ngày mượn |
-| return_date | DateTime | Ngày trả |
-| status | String | `borrowed` hoặc `returned` |
-
-## 8. Logging
-
-Backend xuất log dạng JSON để sau này dễ đẩy lên CloudWatch Logs.
-
-Ví dụ log:
-
-```json
-{
-  "timestamp": "2026-06-15T00:00:00+00:00",
-  "level": "INFO",
-  "service": "library-flask-api",
-  "requestId": "request-id",
-  "message": "Borrow request completed",
-  "book_id": 1,
-  "user_id": "U001"
-}
-```
-
-## 9. GitHub Actions
-
-Project có sẵn 2 workflow:
-
-- `.github/workflows/ci.yml`: kiểm tra build frontend và import backend.
-- `.github/workflows/deploy-beanstalk.yml`: template deploy lên AWS Elastic Beanstalk.
-
-Các secret cần cấu hình nếu deploy AWS:
+Workflow sẽ chạy:
 
 ```text
-AWS_ACCESS_KEY_ID
-AWS_SECRET_ACCESS_KEY
-AWS_REGION
-ECR_REPOSITORY
-EB_APPLICATION_NAME
-EB_ENVIRONMENT_NAME
-EB_SOURCE_BUCKET
+Python syntax + API tests
+→ Frontend build
+→ Docker image build
+→ ECR push
+→ Beanstalk application version
+→ Environment update
+→ Health verification
 ```
 
-## 10. Ghi chú Sprint 0
+## Lưu ý khi deploy đè lên database cũ
 
-Sprint 0 tập trung vào app lõi và nền tảng DevOps ban đầu. Các phần nâng cao như Keycloak, Chat Agent, Vector Search, EKS, X-Ray tracing sâu sẽ làm ở các Sprint sau.
+Backend chạy migration idempotent để bổ sung các cột và bảng mới. Dữ liệu mượn cũ được giữ lại. Với production lâu dài, nên chuyển sang Alembic/Flask-Migrate và backup database trước mỗi migration lớn.
+
+## Tài khoản khởi tạo
+
+Tài khoản seed được điều khiển bởi Environment Properties, không hiển thị trên UI:
+
+```env
+DEFAULT_ADMIN_USERNAME=admin
+DEFAULT_ADMIN_PASSWORD=CHANGE_ADMIN_PASSWORD
+DEFAULT_USER_USERNAME=user
+DEFAULT_USER_PASSWORD=CHANGE_USER_PASSWORD
+```
+
+Phải đổi mật khẩu thật trong Elastic Beanstalk trước khi công khai website.

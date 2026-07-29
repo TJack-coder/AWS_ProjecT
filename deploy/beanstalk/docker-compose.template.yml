@@ -1,0 +1,63 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-library_db}
+      POSTGRES_USER: ${POSTGRES_USER:-library_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-library_password}
+    expose:
+      - "5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-library_user} -d ${POSTGRES_DB:-library_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    image: 521024927908.dkr.ecr.ap-southeast-2.amazonaws.com/aws-library-backend:__IMAGE_TAG__
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql://library_user:library_password@db:5432/library_db}
+      PORT: "5000"
+      FLASK_DEBUG: "false"
+      APP_LOG_FILE: /var/log/aws-library/backend.json.log
+      UPLOAD_FOLDER: /app/uploads
+      AWS_IMAGE_BUCKET: ${AWS_IMAGE_BUCKET:-}
+      AWS_IMAGE_BASE_URL: ${AWS_IMAGE_BASE_URL:-}
+      SES_FROM_EMAIL: ${SES_FROM_EMAIL:-}
+      ENABLE_XRAY: ${ENABLE_XRAY:-false}
+    volumes:
+      - "${APP_LOG_HOST_DIR:-./.runtime/logs/app}:/var/log/aws-library"
+      - "${UPLOAD_HOST_DIR:-./.runtime/uploads}:/app/uploads"
+    expose:
+      - "5000"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  frontend:
+    image: 521024927908.dkr.ecr.ap-southeast-2.amazonaws.com/aws-library-frontend:__IMAGE_TAG__
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - "${NGINX_LOG_HOST_DIR:-./.runtime/logs/nginx}:/var/log/nginx"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  postgres_data:

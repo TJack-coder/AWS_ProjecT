@@ -1,83 +1,167 @@
 import React, { useState } from 'react';
-import { Library } from 'lucide-react';
+import {
+  BookOpenCheck,
+  Eye,
+  EyeOff,
+  Library,
+  LockKeyhole,
+  ShieldCheck,
+  UserRoundPlus,
+  X,
+} from 'lucide-react';
 import { libraryApi } from './api';
 
-export default function Auth({ onLoginSuccess }) {
-  const [error, setError] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
+export default function Auth({ onLoginSuccess, initialError = '' }) {
+  const [mode, setMode] = useState('login');
+  const [error, setError] = useState(initialError);
+  const [notice, setNotice] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [remember, setRemember] = useState(true);
+  const [forgotOpen, setForgotOpen] = useState(false);
+  const [forgotIdentity, setForgotIdentity] = useState('');
+  const resetToken = new URLSearchParams(window.location.search).get('token');
+  const [resetForm, setResetForm] = useState({ password: '', confirm: '' });
+  const [form, setForm] = useState({ username: '', password: '', fullName: '', email: '', phone: '', cccd: '' });
 
-  const [formData, setFormData] = useState({
-    username: '', 
-    password: ''
-  });
+  const change = (event) => setForm((current) => ({ ...current, [event.target.name]: event.target.value }));
 
-  const handleChange = (e) => {
-    setFormData({ ...formData, [e.target.name]: e.target.value });
-  };
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
+  const submit = async (event) => {
+    event.preventDefault();
     setError('');
-    setIsLoading(true);
-
+    setNotice('');
+    setLoading(true);
     try {
-      // Gọi API đăng nhập
-      const res = await libraryApi.login(formData.username, formData.password);
-      
-      // Chặn ngay từ cửa nếu tài khoản không phải là admin
-      if (res.user.role !== 'admin') {
-         throw new Error('Từ chối truy cập: Chỉ tài khoản Quản trị viên (Thủ thư) mới được phép sử dụng hệ thống này.');
-      }
-      
-      onLoginSuccess(res);
-    } catch (err) {
-      setError(err.message || 'Sai tên đăng nhập hoặc mật khẩu.');
+      const response = mode === 'login'
+        ? await libraryApi.login(form.username, form.password)
+        : await libraryApi.register(form);
+      onLoginSuccess(response, remember);
+    } catch (submitError) {
+      setError(submitError.message || 'Không thể xác thực tài khoản.');
     } finally {
-      setIsLoading(false);
+      setLoading(false);
     }
   };
 
+  const requestReset = async (event) => {
+    event.preventDefault();
+    setLoading(true);
+    setError('');
+    try {
+      const response = await libraryApi.forgotPassword(forgotIdentity);
+      setNotice(response.emailSent
+        ? 'Hướng dẫn đặt lại mật khẩu đã được gửi qua email.'
+        : 'Yêu cầu đã được ghi nhận. Nếu hệ thống chưa cấu hình email, vui lòng liên hệ quản trị viên.');
+      setForgotOpen(false);
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const submitReset = async (event) => {
+    event.preventDefault();
+    setError('');
+    if (resetForm.password.length < 8) { setError('Mật khẩu mới phải có ít nhất 8 ký tự.'); return; }
+    if (resetForm.password !== resetForm.confirm) { setError('Hai mật khẩu chưa khớp.'); return; }
+    setLoading(true);
+    try {
+      await libraryApi.resetPassword(resetToken, resetForm.password);
+      setNotice('Đặt lại mật khẩu thành công. Bạn có thể đăng nhập bằng mật khẩu mới.');
+      window.history.replaceState({}, '', '/login');
+      setMode('login');
+    } catch (resetError) { setError(resetError.message); }
+    finally { setLoading(false); }
+  };
+
   return (
-    <div style={{ display: 'flex', minHeight: '100vh', alignItems: 'center', justifyContent: 'center', background: '#cbd5e1', padding: '20px' }}>
-      <div style={{ background: 'white', padding: '40px', borderRadius: '24px', width: '100%', maxWidth: '420px', boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1)' }}>
-        
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', justifyContent: 'center', marginBottom: '24px' }}>
-          <Library size={32} style={{ color: '#1e293b' }} />
-          <h1 style={{ margin: 0, fontSize: '1.8rem', fontWeight: 800, color: '#1e293b' }}>Thư Viện Nội Bộ</h1>
-        </div>
-
-        <h2 style={{ textAlign: 'center', margin: '0 0 20px 0', fontSize: '1.2rem', color: '#64748b' }}>
-          Đăng nhập hệ thống quản lý
-        </h2>
-
-        {error && (
-          <div style={{ background: '#fee2e2', color: '#991b1b', padding: '12px', borderRadius: '12px', marginBottom: '16px', fontSize: '0.9rem', fontWeight: 600 }}>
-            {error}
+    <div className="auth-page">
+      <section className="auth-visual">
+        <div className="auth-brand"><Library size={28} /><span>CloudLibrary</span></div>
+        <div className="auth-copy">
+          <p className="eyebrow">AWS LIBRARY BORROWING SYSTEM</p>
+          <h1>Một thư viện số gọn gàng cho cả quản trị viên và độc giả.</h1>
+          <p>Quản lý kho sách, ảnh bìa, QR, đặt trước, mượn trả, gia hạn, cảnh báo quá hạn và báo cáo trong cùng một ứng dụng.</p>
+          <div className="auth-benefits">
+            <div><BookOpenCheck size={22} /><span><strong>Kho sách trực quan</strong><small>Tìm kiếm, lọc, phân trang và xem QR.</small></span></div>
+            <div><ShieldCheck size={22} /><span><strong>Quy trình an toàn</strong><small>Độc giả gửi yêu cầu, thủ thư kiểm tra và xác nhận.</small></span></div>
+            <div><UserRoundPlus size={22} /><span><strong>Đăng ký nhanh</strong><small>Tạo tài khoản độc giả ngay trên website.</small></span></div>
           </div>
-        )}
-
-        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          <input 
-            type="text" name="username" placeholder="Tên đăng nhập Admin *" required
-            value={formData.username} onChange={handleChange} 
-            style={{ padding: '14px', borderRadius: '12px', border: '1px solid #cbd5e1', background: '#f8fafc' }} 
-          />
-          
-          <input 
-            type="password" name="password" placeholder="Mật khẩu *" required
-            value={formData.password} onChange={handleChange} 
-            style={{ padding: '14px', borderRadius: '12px', border: '1px solid #cbd5e1', background: '#f8fafc' }} 
-          />
-
-          <button type="submit" className="primary-button" disabled={isLoading} style={{ padding: '14px', fontSize: '1rem', marginTop: '8px', opacity: isLoading ? 0.7 : 1 }}>
-            {isLoading ? 'Đang xác thực...' : 'Đăng nhập'}
-          </button>
-        </form>
-        
-        <div style={{ textAlign: 'center', marginTop: '24px', fontSize: '0.85rem', color: '#94a3b8' }}>
-          Tài khoản mặc định hệ thống: <strong>admin / admin123</strong>
         </div>
-      </div>
+        <div className="auth-legal">© 2026 CloudLibrary · Chính sách bảo mật · Điều khoản sử dụng</div>
+      </section>
+
+      <section className="auth-form-side">
+        <div className="auth-card">
+          <div className="auth-mobile-brand"><Library size={26} /><span>CloudLibrary</span></div>
+          {resetToken ? <>
+            <div className="auth-heading"><h2>Đặt lại mật khẩu</h2><p>Tạo mật khẩu mới cho tài khoản của bạn.</p></div>
+            {error && <div className="form-error">{error}</div>}{notice && <div className="form-notice">{notice}</div>}
+            <form className="auth-form" onSubmit={submitReset}>
+              <label>Mật khẩu mới<span className="password-field"><input type={showPassword ? 'text' : 'password'} value={resetForm.password} onChange={(e)=>setResetForm((v)=>({...v,password:e.target.value}))} minLength="8" required/><button type="button" onClick={()=>setShowPassword((v)=>!v)}>{showPassword?<EyeOff size={18}/>:<Eye size={18}/>}</button></span></label>
+              <label>Xác nhận mật khẩu<input type="password" value={resetForm.confirm} onChange={(e)=>setResetForm((v)=>({...v,confirm:e.target.value}))} minLength="8" required/></label>
+              <button className="primary-button auth-submit" disabled={loading}>{loading?'Đang cập nhật...':'Đặt lại mật khẩu'}</button>
+              {notice && <button type="button" className="ghost-button" onClick={()=>window.location.assign('/login')}>Về trang đăng nhập</button>}
+            </form>
+          </> : <>
+          <div className="auth-tabs">
+            <button className={mode === 'login' ? 'active' : ''} onClick={() => { setMode('login'); setError(''); }}>Đăng nhập</button>
+            <button className={mode === 'register' ? 'active' : ''} onClick={() => { setMode('register'); setError(''); }}>Tạo tài khoản</button>
+          </div>
+          <div className="auth-heading">
+            <h2>{mode === 'login' ? 'Chào mừng trở lại' : 'Đăng ký độc giả mới'}</h2>
+            <p>{mode === 'login' ? 'Đăng nhập để tiếp tục sử dụng thư viện.' : 'Tài khoản mới sẽ có quyền độc giả.'}</p>
+          </div>
+
+          {error && <div className="form-error">{error}</div>}
+          {notice && <div className="form-notice">{notice}</div>}
+
+          <form onSubmit={submit} className="auth-form">
+            {mode === 'register' && (
+              <>
+                <label>Họ và tên<input name="fullName" value={form.fullName} onChange={change} placeholder="Nguyễn Văn A" required /></label>
+                <label>Email<input type="email" name="email" value={form.email} onChange={change} placeholder="name@example.com" /></label>
+                <div className="form-row">
+                  <label>Số điện thoại<input name="phone" value={form.phone} onChange={change} placeholder="09xxxxxxxx" /></label>
+                  <label>CCCD<input name="cccd" value={form.cccd} onChange={change} placeholder="12 chữ số" /></label>
+                </div>
+              </>
+            )}
+            <label>Tên đăng nhập<input name="username" value={form.username} onChange={change} placeholder="Nhập tên đăng nhập" autoComplete="username" required /></label>
+            <label>Mật khẩu
+              <span className="password-field">
+                <input type={showPassword ? 'text' : 'password'} name="password" value={form.password} onChange={change} placeholder="Tối thiểu 8 ký tự" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} minLength="8" required />
+                <button type="button" aria-label={showPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'} onClick={() => setShowPassword((value) => !value)}>{showPassword ? <EyeOff size={18} /> : <Eye size={18} />}</button>
+              </span>
+            </label>
+            {mode === 'login' && (
+              <div className="auth-options">
+                <label className="check-control"><input type="checkbox" checked={remember} onChange={(event) => setRemember(event.target.checked)} />Ghi nhớ đăng nhập</label>
+                <button type="button" className="link-button" onClick={() => setForgotOpen(true)}>Quên mật khẩu?</button>
+              </div>
+            )}
+            <button className="primary-button auth-submit" type="submit" disabled={loading}>
+              {loading ? 'Đang xử lý...' : mode === 'login' ? 'Đăng nhập' : 'Tạo tài khoản'}
+            </button>
+          </form>
+          <div className="auth-security-note"><LockKeyhole size={16} /><span>Thông tin đăng nhập được truyền qua kết nối bảo mật khi HTTPS được bật.</span></div>
+          </>}
+        </div>
+      </section>
+
+      {forgotOpen && (
+        <div className="modal-overlay" onClick={() => setForgotOpen(false)}>
+          <div className="modal-content compact-modal" onClick={(event) => event.stopPropagation()}>
+            <button className="modal-close" onClick={() => setForgotOpen(false)}><X size={20} /></button>
+            <div className="modal-heading"><p className="eyebrow dark">PASSWORD RECOVERY</p><h2>Khôi phục mật khẩu</h2><p>Nhập tên đăng nhập hoặc email đã đăng ký.</p></div>
+            <form className="modal-form" onSubmit={requestReset}>
+              <label>Tài khoản hoặc email<input value={forgotIdentity} onChange={(event) => setForgotIdentity(event.target.value)} required /></label>
+              <button className="primary-button" disabled={loading}>{loading ? 'Đang gửi...' : 'Gửi hướng dẫn'}</button>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

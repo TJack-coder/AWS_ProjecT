@@ -25,7 +25,7 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: ${DATABASE_URL:-postgresql://library_user:library_password@db:5432/library_db}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-library_user}:${POSTGRES_PASSWORD:-library_password}@db:5432/${POSTGRES_DB:-library_db}
       PORT: "5000"
       FLASK_DEBUG: "false"
       APP_LOG_FILE: /var/log/aws-library/backend.json.log
